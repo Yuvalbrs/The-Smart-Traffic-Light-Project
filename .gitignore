@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# SUMO / simulation outputs
+*.log
+tripinfo*.xml
+*.out.xml
+sumo-gui.log
+
+# Generated data & artifacts (large / reproducible)
+data/
+runs/
+checkpoints/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.jsonl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

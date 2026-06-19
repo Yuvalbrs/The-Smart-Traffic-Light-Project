@@ -1,0 +1,18 @@
+# Minimal dependencies for the Smart-Traffic-RL code repo.
+# Versions are loosely pinned for now; exact versions get frozen into the repro
+# contract (`data_version`) once it is active. See vault: notes/research-eval-repro.
+#
+# NOTE: `torch` is intentionally NOT listed here. T-00-01 does not need it, and the
+# CUDA build must be installed deliberately with the correct index URL for the GPU.
+# See README -> "GPU / torch".
+
+traci
+sumolib
+numpy
+gymnasium
+
+# Added in later phases (kept here as a roadmap, commented out):
+# fastapi          # systems/API phase
+# uvicorn          # systems/API phase
+# scipy            # evaluation phase (Wilcoxon signed-rank)
+# pandas           # evaluation phase
