@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- T-01-02 connections = the MPLight lane allocation, wired explicitly so the
+     movement<->lane mapping is exact (not left to netconvert's auto-connect).
+     SUMO lane convention: lane 0 = RIGHTMOST, lane 2 = LEFTMOST.
+       lane 2 (leftmost)  -> LEFT turn only          (the controlled "left" movement)
+       lane 1 (middle)    -> THROUGH only            (the controlled "through" movement)
+       lane 0 (rightmost) -> THROUGH + RIGHT          (the FREE movement, never signal-controlled)
+     Geometric turns (at a + intersection):
+       N (southbound): left->t_e  through->t_s  right->t_w
+       E (westbound):  left->t_s  through->t_w  right->t_n
+       S (northbound): left->t_w  through->t_n  right->t_e
+       W (eastbound):  left->t_n  through->t_e  right->t_s -->
+<connections>
+    <!-- North approach (n_t) -->
+    <connection from="n_t" to="t_e" fromLane="2" toLane="2"/>  <!-- M0  N left   (controlled) -->
+    <connection from="n_t" to="t_s" fromLane="1" toLane="1"/>  <!-- M1  N through(controlled) -->
+    <connection from="n_t" to="t_s" fromLane="0" toLane="0"/>  <!-- M2  N right-lane through (free) -->
+    <connection from="n_t" to="t_w" fromLane="0" toLane="0"/>  <!-- M2  N right  (free) -->
+
+    <!-- East approach (e_t) -->
+    <connection from="e_t" to="t_s" fromLane="2" toLane="2"/>  <!-- M3  E left   (controlled) -->
+    <connection from="e_t" to="t_w" fromLane="1" toLane="1"/>  <!-- M4  E through(controlled) -->
+    <connection from="e_t" to="t_w" fromLane="0" toLane="0"/>  <!-- M5  E right-lane through (free) -->
+    <connection from="e_t" to="t_n" fromLane="0" toLane="0"/>  <!-- M5  E right  (free) -->
+
+    <!-- South approach (s_t) -->
+    <connection from="s_t" to="t_w" fromLane="2" toLane="2"/>  <!-- M6  S left   (controlled) -->
+    <connection from="s_t" to="t_n" fromLane="1" toLane="1"/>  <!-- M7  S through(controlled) -->
+    <connection from="s_t" to="t_n" fromLane="0" toLane="0"/>  <!-- M8  S right-lane through (free) -->
+    <connection from="s_t" to="t_e" fromLane="0" toLane="0"/>  <!-- M8  S right  (free) -->
+
+    <!-- West approach (w_t) -->
+    <connection from="w_t" to="t_n" fromLane="2" toLane="2"/>  <!-- M9  W left   (controlled) -->
+    <connection from="w_t" to="t_e" fromLane="1" toLane="1"/>  <!-- M10 W through(controlled) -->
+    <connection from="w_t" to="t_e" fromLane="0" toLane="0"/>  <!-- M11 W right-lane through (free) -->
+    <connection from="w_t" to="t_s" fromLane="0" toLane="0"/>  <!-- M11 W right  (free) -->
+</connections>

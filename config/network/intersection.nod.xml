@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- T-01-02 real 4-way intersection nodes.
+     Center C is the signalised junction; N/E/S/W are the approach endpoints
+     150 m out (03-simulation.md §4.1). Canonical approach order N,E,S,W per
+     specs/movements.yaml. netOffset is (0,0) by construction (coords centred
+     on C) - asserted at build (research-sumo R4-3). -->
+<nodes>
+    <node id="C" x="0.0"    y="0.0"    type="traffic_light"/>
+    <node id="N" x="0.0"    y="150.0"  type="priority"/>
+    <node id="E" x="150.0"  y="0.0"    type="priority"/>
+    <node id="S" x="0.0"    y="-150.0" type="priority"/>
+    <node id="W" x="-150.0" y="0.0"    type="priority"/>
+</nodes>

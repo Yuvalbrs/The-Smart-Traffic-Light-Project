@@ -10,6 +10,7 @@ traci
 sumolib
 numpy
 gymnasium
+pyyaml          # load specs/movements.yaml for the network-build assertion (T-01-02)
 
 # Added in later phases (kept here as a roadmap, commented out):
 # fastapi          # systems/API phase

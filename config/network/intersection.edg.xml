@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- T-01-02 edges: one incoming + one outgoing edge per approach, 3 lanes each
+     (03-simulation.md §4.1: 3 lanes/approach, 150 m, 13.89 m/s).
+     Naming: {from}_{to} with n,e,s,w external and t (= "to C") the centre, e.g.
+     n_t = North->Centre incoming, t_n = Centre->North outgoing.
+     SUMO lane indices run 0 = RIGHTMOST .. 2 = LEFTMOST; the MPLight allocation
+     (leftmost=left-only, middle=through-only, rightmost=through+right) is wired
+     in intersection.con.xml, NOT by lane-name, to avoid the index-convention trap. -->
+<edges>
+    <!-- incoming -->
+    <edge id="n_t" from="N" to="C" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="e_t" from="E" to="C" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="s_t" from="S" to="C" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="w_t" from="W" to="C" numLanes="3" speed="13.89" priority="1"/>
+    <!-- outgoing -->
+    <edge id="t_n" from="C" to="N" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="t_e" from="C" to="E" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="t_s" from="C" to="S" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="t_w" from="C" to="W" numLanes="3" speed="13.89" priority="1"/>
+</edges>
