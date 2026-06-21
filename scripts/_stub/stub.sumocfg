@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Throwaway stub SUMO config for the T-00-01 vertical slice ONLY. -->
+<configuration>
+    <input>
+        <net-file value="intersection_stub.net.xml"/>
+        <route-files value="stub.rou.xml"/>
+    </input>
+    <time>
+        <begin value="0"/>
+        <step-length value="1.0"/>
+    </time>
+    <processing>
+        <time-to-teleport value="-1"/>
+    </processing>
+    <report>
+        <no-step-log value="true"/>
+        <no-warnings value="true"/>
+    </report>
+</configuration>

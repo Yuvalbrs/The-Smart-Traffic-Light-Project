@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Throwaway stub nodes for the T-00-01 vertical slice ONLY.
+     A minimal 4-arm cross with a traffic light at the centre so netconvert
+     auto-generates a TLS program to drive. Deleted once the real network
+     (T-01-02) exists. Do NOT build anything real on top of this. -->
+<nodes>
+    <node id="C" x="0"    y="0"    type="traffic_light"/>
+    <node id="N" x="0"    y="100"  type="priority"/>
+    <node id="S" x="0"    y="-100" type="priority"/>
+    <node id="E" x="100"  y="0"    type="priority"/>
+    <node id="W" x="-100" y="0"    type="priority"/>
+</nodes>

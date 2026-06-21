@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Throwaway stub demand for the T-00-01 vertical slice ONLY: a steady low
+     stream straight through the intersection so the episode has vehicles for
+     the full hour. Uses <flow> for simplicity (the REAL routes use explicit
+     seeded <vehicle> elements for replay determinism - see T-01-08). -->
+<routes>
+    <vType id="car" accel="2.6" decel="4.5" length="5.0" maxSpeed="13.9" sigma="0.5"/>
+    <route id="we" edges="W2C C2E"/>
+    <route id="ew" edges="E2C C2W"/>
+    <route id="ns" edges="N2C C2S"/>
+    <route id="sn" edges="S2C C2N"/>
+    <flow id="f_we" type="car" route="we" begin="0" end="3600" period="8"/>
+    <flow id="f_ew" type="car" route="ew" begin="0" end="3600" period="9"/>
+    <flow id="f_ns" type="car" route="ns" begin="0" end="3600" period="11"/>
+    <flow id="f_sn" type="car" route="sn" begin="0" end="3600" period="12"/>
+</routes>
