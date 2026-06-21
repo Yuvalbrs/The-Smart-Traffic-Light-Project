@@ -18,12 +18,16 @@ avoid drift) — it lives in the vault:
 `C:\Year3\Obsidian\Yuval\30_Projects\smart-traffic-rl\`
 
 - Master task order: `backlog.md`
-- Decisions + ADRs: `decisions.md`, `notes/adr-*.md`
+- Locked decisions ledger: `decisions.md`
+- ADRs: `notes/adr-003-rl-algorithm.md`, `notes/adr-004-hybrid-integration.md`
+- System architecture: `notes/system-architecture-overview.md`
 - KPIs / metric formulas: `notes/kpis.md`
 - Evaluation methodology: `notes/evaluation-methodology.md`
-- Risk register: `notes/risks-and-mitigations.md`
+- Risk register and cut-points: `notes/risks-and-mitigations.md`
 - Glossary (frozen): `final-glossary.md`
-- Specs: `specs/movements.yaml`, `specs/data-schema.md`
+- Movement/phase + data specs: `specs/movements.yaml`, `specs/data-schema.md`
+- Execution-readiness research: `notes/research/*.md`
+- Open items / pending decisions: `notes/open-items.md`
 
 ## Hard rules — do not violate without explicit user approval
 
@@ -35,8 +39,9 @@ avoid drift) — it lives in the vault:
 4. **The reward is locked.** `r = -|intersection pressure| - 0.1 * 1[a != a_prev]`. Switch penalty
    default 0.1.
 5. **The baselines are locked.** Webster, max-pressure, SUMO actuated. Three. Mandatory.
-6. **The architecture is locked.** Python FastAPI hub, SUMO via TraCI, WebSocket 5 Hz (dashboard) /
-   10 Hz (Unity), REST for replay, no auth.
+6. **The architecture is locked.** Python FastAPI hub, SUMO via TraCI, WebSocket **1 Hz data push**
+   (both Unity + dashboard; clients interpolate client-side — corrected from "5/10 Hz" on 2026-06-20,
+   see vault `notes/open-items.md` F10 + `notes/unity-sumo-integration.md`), REST for replay, no auth.
 7. **The provenance chain is mandatory.** Every checkpoint filename embeds `lstm_version`. Every
    SQLite results row records `(data_version, lstm_version, run_id, git_sha)`.
 
@@ -56,9 +61,9 @@ ADR before changing code.
 ## Repository layout
 
 See `README.md`. Authoritative naming: `src/{env,ml,baselines,data,api,metrics}/`, plus `scripts/`,
-`config/`, `tests/`, `frontend/`, `unity/`, `docs/` (signpost). NOTE: some planning notes in the
-vault use older names (`simulator/`, `agents/`, `forecaster/`, `backend/`); this repo follows the
-`src/` naming from these rules. Reconcile the vault notes when convenient.
+`config/`, `tests/`, `frontend/`, `unity/`, `docs/` (signpost to the vault). The `src/` naming is
+canonical; the older `simulator/`/`agents/`/`forecaster/`/`backend/` names were reconciled out of the
+vault on 2026-06-20.
 
 ## Workflow rules
 
