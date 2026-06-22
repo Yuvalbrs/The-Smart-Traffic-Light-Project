@@ -50,20 +50,30 @@ class Intersection:
         tls_id: str,
         movement_ids: list[str],
         phase_green: dict[int, list[str]],
+        phase_group: dict[int, str],
         free_movements: list[str],
         movement_links: dict[str, list[int]],
         movement_in_lanes: dict[str, list[str]],
         movement_out_lanes: dict[str, list[str]],
         n_links: int,
+        yellow_s: int,
+        all_red_s: int,
     ) -> None:
         self.tls_id = tls_id
         self.movement_ids = movement_ids  # canonical M0..M11 order
         self._phase_green = phase_green
+        self._phase_group = phase_group  # action -> "NS" | "EW" (NEMA barrier side)
         self._free = free_movements
         self._links = movement_links
         self._in_lanes = movement_in_lanes
         self._out_lanes = movement_out_lanes
         self._n_links = n_links
+        self.yellow_s = yellow_s
+        self.all_red_s = all_red_s
+        # free (uncontrolled right-turn) links stay green through every transition
+        self._free_links: set[int] = set()
+        for mid in free_movements:
+            self._free_links.update(movement_links[mid])
 
     # --- construction ---
 
@@ -85,6 +95,10 @@ class Intersection:
         movement_ids = sorted(movements, key=lambda m: int(m[1:]))  # M0..M11
         free = [m for m in movement_ids if not movements[m]["controlled"]]
         phase_green = {int(p): list(phases[p]["green"]) for p in phases}
+        phase_group = {int(p): phases[p]["group"] for p in phases}
+        transitions = spec.get("transitions", {})
+        yellow_s = int(transitions.get("yellow_s", 3))
+        all_red_s = int(transitions.get("all_red_s", 2))
 
         controlled_links = conn.trafficlight.getControlledLinks(tls_id)
         n_links = len(controlled_links)
@@ -106,11 +120,14 @@ class Intersection:
             tls_id=tls_id,
             movement_ids=movement_ids,
             phase_green=phase_green,
+            phase_group=phase_group,
             free_movements=free,
             movement_links={m: list(binding[m]) for m in movement_ids},
             movement_in_lanes=in_lanes,
             movement_out_lanes=out_lanes,
             n_links=n_links,
+            yellow_s=yellow_s,
+            all_red_s=all_red_s,
         )
 
     # --- pressure (unnormalized) ---
@@ -130,16 +147,59 @@ class Intersection:
 
     # --- green-state synthesis for an action ---
 
+    def _links_for(self, movements: list[str]) -> set[int]:
+        """Union of TLS link indices for a set of movements."""
+        out: set[int] = set()
+        for mid in movements:
+            out.update(self._links[mid])
+        return out
+
     def green_state(self, action: int) -> str:
         """Return the SUMO RYG string for ``action``'s green phase.
 
         A link is ``G`` if it belongs to one of the action's green movements or to
-        a free (always-permitted) right turn; otherwise ``r``. Yellow/all-red
-        transitions are layered on by T-02-03, not here.
+        a free (always-permitted) right turn; otherwise ``r``.
         """
+        self._check_action(action)
+        green = self._links_for(self._phase_green[action]) | self._free_links
+        return "".join("G" if i in green else "r" for i in range(self._n_links))
+
+    def is_barrier_crossing(self, prev_action: int, next_action: int) -> bool:
+        """True if switching ``prev_action -> next_action`` crosses the NEMA barrier.
+
+        A barrier crossing is any change between an NS-group phase (0-3) and an
+        EW-group phase (4-7); it requires the extra all-red clearance (T-02-03).
+        """
+        self._check_action(prev_action)
+        self._check_action(next_action)
+        return self._phase_group[prev_action] != self._phase_group[next_action]
+
+    def yellow_state(self, prev_action: int, next_action: int) -> str:
+        """RYG string for the yellow tick between ``prev_action`` and ``next_action``.
+
+        Greens that are ending (green in ``prev`` but not ``next``) show ``y``;
+        greens continuing through the change stay ``G``; free rights stay ``G``;
+        everything else is ``r`` (research-sumo.md s1: yellow replaces just-ended
+        greens with ``y``).
+        """
+        prev_green = self._links_for(self._phase_green[prev_action])
+        next_green = self._links_for(self._phase_green[next_action])
+        chars = []
+        for i in range(self._n_links):
+            if i in self._free_links:
+                chars.append("G")
+            elif i in prev_green and i not in next_green:
+                chars.append("y")
+            elif i in prev_green:
+                chars.append("G")  # green in both -> no need to clear
+            else:
+                chars.append("r")
+        return "".join(chars)
+
+    def all_red_state(self) -> str:
+        """RYG string for the all-red clearance tick (free rights stay green)."""
+        return "".join("G" if i in self._free_links else "r" for i in range(self._n_links))
+
+    def _check_action(self, action: int) -> None:
         if not 0 <= action < N_PHASES:
             raise ValueError(f"action {action} out of range 0..{N_PHASES - 1}")
-        green_links: set[int] = set()
-        for mid in self._phase_green[action] + self._free:
-            green_links.update(self._links[mid])
-        return "".join("G" if i in green_links else "r" for i in range(self._n_links))

@@ -53,6 +53,55 @@ def test_intersection_pressure_and_green_state() -> None:
         traci.close()
 
 
+# --- T-02-03: yellow + all-red transitions ---
+
+def test_transition_states_and_barrier_logic() -> None:
+    traci.start(["sumo", "-n", "config/network/intersection.net.xml", "--no-step-log", "true"])
+    try:
+        ix = Intersection.from_traci(traci, "C")
+        # barrier: NS group = 0..3, EW group = 4..7
+        assert ix.is_barrier_crossing(0, 4) is True
+        assert ix.is_barrier_crossing(3, 5) is True
+        assert ix.is_barrier_crossing(0, 1) is False
+        assert ix.is_barrier_crossing(4, 7) is False
+
+        # yellow on a within-group switch: ending greens show 'y'; SUMO accepts it
+        yellow = ix.yellow_state(0, 1)
+        assert "y" in yellow and len(yellow) == 16
+        traci.trafficlight.setRedYellowGreenState("C", yellow)
+        traci.simulationStep()
+        assert "y" in traci.trafficlight.getRedYellowGreenState("C")
+
+        # all-red: no yellow, controlled links red, free rights still green
+        all_red = ix.all_red_state()
+        assert "y" not in all_red and "G" in all_red  # only free rights are G
+        traci.trafficlight.setRedYellowGreenState("C", all_red)
+        traci.simulationStep()
+        live = traci.trafficlight.getRedYellowGreenState("C")
+        assert "y" not in live and "G" in live
+    finally:
+        traci.close()
+
+
+def test_step_conserves_decision_window_across_switches(tmp_path) -> None:
+    """Yellow/all-red are spent INSIDE the 10 s window, never added to it."""
+    from scripts.build_routes import write_routes
+    from src.scenarios.config import load_all
+
+    scn = next(s for s in load_all() if s.id == "SCN-02")  # heavy -> never empties in 60 s
+    route = write_routes(scn, 0, out_dir=tmp_path)
+    env = SUMOEnv(route, episode_length_s=600)
+    try:
+        env.reset()
+        for k in range(6):
+            action = 4 if k % 2 == 0 else 0  # alternate -> barrier crossing every step
+            _, _, terminated, truncated, info = env.step(action)
+            assert not (terminated or truncated)
+            assert info["sim_time"] == pytest.approx((k + 1) * 10)  # exactly 10 s/step
+    finally:
+        env.close()
+
+
 # --- Gym API conformance ---
 
 def test_gym_api_and_observation_contract(tmp_path) -> None:

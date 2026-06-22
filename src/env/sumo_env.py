@@ -153,30 +153,37 @@ class SUMOEnv(gym.Env):
     def step(
         self, action: int
     ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        """Apply ``action``, advance the decision window, return the Gym 5-tuple."""
+        """Apply ``action``, advance the decision window, return the Gym 5-tuple.
+
+        On a phase change the window is spent as: 3 s yellow, then (only when the
+        change crosses the NS<->EW barrier) 2 s all-red, then the new green for the
+        remainder - so the simulation always advances ``decision_interval_s`` and
+        a phase never snaps green->green (T-02-03). Free right turns stay green
+        throughout.
+        """
         if self._intersection is None:
             raise RuntimeError("step() called before reset()")
         action = int(action)
-        switched = action != self._last_action
-
-        # T-02-01: instant green (yellow/all-red injection is T-02-03).
-        traci.trafficlight.setRedYellowGreenState(
-            self._tls_id, self._intersection.green_state(action)
-        )
+        ix = self._intersection
+        prev = self._last_action
+        switched = action != prev
 
         terminated = False
-        for _ in range(self._decision_interval_s):
-            traci.simulationStep()
-            self._sim_time = traci.simulation.getTime()
-            self._loaded += traci.simulation.getLoadedNumber()
-            self._departed += traci.simulation.getDepartedNumber()
-            self._arrived += traci.simulation.getArrivedNumber()
-            if traci.simulation.getMinExpectedNumber() == 0:  # B3 guard #2
-                terminated = True
-                break
+        remaining = self._decision_interval_s
+
+        if switched:
+            traci.trafficlight.setRedYellowGreenState(self._tls_id, ix.yellow_state(prev, action))
+            terminated, remaining = self._advance(ix.yellow_s, remaining)
+            if not terminated and ix.is_barrier_crossing(prev, action):
+                traci.trafficlight.setRedYellowGreenState(self._tls_id, ix.all_red_state())
+                terminated, remaining = self._advance(ix.all_red_s, remaining)
+
+        if not terminated:  # the (new) green for the rest of the window
+            traci.trafficlight.setRedYellowGreenState(self._tls_id, ix.green_state(action))
+            terminated, remaining = self._advance(remaining, remaining)
 
         truncated = (not terminated) and self._sim_time >= self._episode_length_s
-        pressures = self._intersection.pressures(traci)  # unnormalized, for reward
+        pressures = ix.pressures(traci)  # unnormalized, for reward
         reward = float(-np.abs(pressures).sum())
         if switched:
             reward -= self._switch_penalty
@@ -184,6 +191,25 @@ class SUMOEnv(gym.Env):
 
         obs = self._observe(pressures)
         return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
+
+    def _advance(self, n_ticks: int, remaining: int) -> tuple[bool, int]:
+        """Step the sim up to ``n_ticks`` (capped by ``remaining``), updating counters.
+
+        Returns ``(terminated, remaining)`` where ``terminated`` is the B3 guard #2
+        condition (``getMinExpectedNumber() == 0``).
+        """
+        terminated = False
+        for _ in range(min(n_ticks, remaining)):
+            traci.simulationStep()
+            self._sim_time = traci.simulation.getTime()
+            self._loaded += traci.simulation.getLoadedNumber()
+            self._departed += traci.simulation.getDepartedNumber()
+            self._arrived += traci.simulation.getArrivedNumber()
+            remaining -= 1
+            if traci.simulation.getMinExpectedNumber() == 0:  # B3 guard #2
+                terminated = True
+                break
+        return terminated, remaining
 
     def close(self) -> None:
         """Close the TraCI connection (idempotent)."""
