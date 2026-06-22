@@ -11,6 +11,7 @@ sumolib
 numpy
 gymnasium
 pyyaml          # load specs/movements.yaml for the network-build assertion (T-01-02)
+sqlalchemy      # SQLite (WAL) results schema + ORM (T-01-03)
 
 # Added in later phases (kept here as a roadmap, commented out):
 # fastapi          # systems/API phase
