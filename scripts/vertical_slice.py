@@ -1,19 +1,24 @@
 """T-00-01 - Trivial end-to-end vertical slice.
 
-Proves the SUMO <-> TraCI <-> Python plumbing end to end: launch SUMO on a
-throwaway stub network, connect via TraCI, drive one full 3600 s episode with
-random ``Discrete(8)`` actions, and exit cleanly.
+Proves the SUMO <-> TraCI <-> Python plumbing end to end: launch SUMO on the
+real 4-way intersection (T-01-02) with a generated route file (T-01-08),
+connect via TraCI, drive one full 3600 s episode with random ``Discrete(8)``
+actions, and exit cleanly with vehicles having actually departed and arrived.
 
 This is deliberately minimal - no RL, no LSTM, no reward, no action masking, no
-dashboard, no Unity. It runs on ``scripts/_stub/`` (a throwaway 4-arm cross),
-NOT the real network (T-01-02). Once the real net exists the slice is
-re-pointed at it; until then this catches Python/SUMO version, TraCI
-connection, network-file and environment-setup problems while there is nothing
-else to disentangle them from.
+dashboard, no Unity. It runs on ``config/network/intersection.net.xml`` (the
+real net) and a ``config/routes/scn_*.rou.xml`` route file, catching
+Python/SUMO version, TraCI connection, network-file and route-loading problems
+while there is nothing else to disentangle them from.
+
+The route files are gitignored (regenerable); if the requested one is missing,
+generate them first with ``python -m scripts.build_routes``.
 
 Run::
 
-    python -m scripts.vertical_slice
+    python -m scripts.vertical_slice                       # scn 01, seed 0
+    python -m scripts.vertical_slice --scenario 3 --seed 2
+    python -m scripts.vertical_slice --gui
 """
 
 from __future__ import annotations
@@ -36,19 +41,47 @@ EPISODE_LENGTH_S: int = 3600
 ACTION_SPACE_N: int = 8
 SEED: int = 42
 
-_STUB_DIR = Path(__file__).resolve().parent / "_stub"
-_SUMOCFG = _STUB_DIR / "stub.sumocfg"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_NET_FILE = _REPO_ROOT / "config" / "network" / "intersection.net.xml"
+_ROUTES_DIR = _REPO_ROOT / "config" / "routes"
+DEFAULT_SCENARIO: int = 1
+DEFAULT_SEED: int = 0
 
 
-def run_episode(use_gui: bool = False) -> int:
-    """Run one full vertical-slice episode end to end.
+def route_file_for(scenario: int, seed: int) -> Path:
+    """Return the path to the generated route file for ``(scenario, seed)``.
 
-    Launches SUMO on the stub config, connects via TraCI, and drives a random
-    phase every ``DECISION_INTERVAL_S`` seconds until the episode horizon is
-    reached or no vehicles remain. The TraCI connection is always closed.
+    Mirrors the naming written by ``scripts.build_routes`` (zero-padded to two
+    digits, e.g. ``scn_01_seed_00.rou.xml``). The file may not exist; callers
+    are responsible for checking.
 
     Parameters
     ----------
+    scenario : int
+        Scenario number (1-5), matching ``config/scenarios/scn_NN.yaml``.
+    seed : int
+        Generation seed for the route file.
+
+    Returns
+    -------
+    Path
+        Absolute path to the corresponding ``.rou.xml`` under ``config/routes``.
+    """
+    return _ROUTES_DIR / f"scn_{scenario:02d}_seed_{seed:02d}.rou.xml"
+
+
+def run_episode(route_file: Path, use_gui: bool = False) -> int:
+    """Run one full vertical-slice episode end to end.
+
+    Launches SUMO on the real net (``_NET_FILE``) with ``route_file``, connects
+    via TraCI, and drives a random phase every ``DECISION_INTERVAL_S`` seconds
+    until the episode horizon is reached or no vehicles remain. The TraCI
+    connection is always closed.
+
+    Parameters
+    ----------
+    route_file : Path
+        The ``.rou.xml`` route file to load against the real network.
     use_gui : bool, optional
         If ``True``, launch the ``sumo-gui`` visual front-end (auto-started,
         with a small per-step delay so vehicles are watchable) instead of the
@@ -62,15 +95,19 @@ def run_episode(use_gui: bool = False) -> int:
     Raises
     ------
     RuntimeError
-        If the stub network exposes no traffic light to control.
+        If the network exposes no traffic light to control.
     """
     sumo_binary = checkBinary("sumo-gui" if use_gui else "sumo")
     cmd = [
         sumo_binary,
-        "-c",
-        str(_SUMOCFG),
+        "--net-file",
+        str(_NET_FILE),
+        "--route-files",
+        str(route_file),
         "--step-length",
         str(STEP_LENGTH_S),
+        "--seed",
+        str(SEED),
         "--no-step-log",
         "true",
         "--no-warnings",
@@ -87,13 +124,15 @@ def run_episode(use_gui: bool = False) -> int:
 
         tls_ids = traci.trafficlight.getIDList()
         if not tls_ids:
-            raise RuntimeError("stub network has no traffic light to control")
+            raise RuntimeError("network has no traffic light to control")
         tls_id = tls_ids[0]
         n_phases = len(traci.trafficlight.getAllProgramLogics(tls_id)[0].phases)
         print(f"[slice] controlling TLS {tls_id!r} with {n_phases} phases")
 
         rng = random.Random(SEED)
         step = 0
+        departed_total = 0
+        arrived_total = 0
         # getMinExpectedNumber() == 0 -> no vehicles loaded or in transit; this
         # is the natural early-termination guard (the same pattern T-02-01 bakes
         # in as a B3 guard for real episodes).
@@ -106,6 +145,8 @@ def run_episode(use_gui: bool = False) -> int:
                     if step >= EPISODE_LENGTH_S or traci.simulation.getMinExpectedNumber() == 0:
                         break
                     traci.simulationStep()
+                    departed_total += traci.simulation.getDepartedNumber()
+                    arrived_total += traci.simulation.getArrivedNumber()
                     step += 1
         except traci.exceptions.FatalTraCIError:
             # Closing the GUI window mid-run drops the connection; in GUI mode
@@ -116,7 +157,10 @@ def run_episode(use_gui: bool = False) -> int:
             return step
 
         sim_time = traci.simulation.getTime()
-        print(f"[slice] episode complete: {step} steps, sim_time={sim_time:.0f}s")
+        print(
+            f"[slice] episode complete: {step} steps, sim_time={sim_time:.0f}s, "
+            f"departed={departed_total}, arrived={arrived_total}"
+        )
         return step
     finally:
         try:
@@ -127,7 +171,21 @@ def run_episode(use_gui: bool = False) -> int:
 
 def main() -> None:
     """Entry point: parse args, run one episode, and exit 0 on success."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="Vertical slice: random Discrete(8) policy on the real net.",
+    )
+    parser.add_argument(
+        "--scenario",
+        type=int,
+        default=DEFAULT_SCENARIO,
+        help="scenario number 1-5 (config/scenarios/scn_NN.yaml); default 1",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help="route-file generation seed; default 0",
+    )
     parser.add_argument(
         "--gui",
         action="store_true",
@@ -135,7 +193,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    steps = run_episode(use_gui=args.gui)
+    route_file = route_file_for(args.scenario, args.seed)
+    if not route_file.exists():
+        print(
+            f"[slice] route file not found: {route_file}\n"
+            f"[slice] route files are gitignored (regenerable); generate them with:\n"
+            f"[slice]     python -m scripts.build_routes",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"[slice] net={_NET_FILE.name}  routes={route_file.name}")
+
+    steps = run_episode(route_file, use_gui=args.gui)
     print(f"[slice] OK - exited cleanly after {steps} steps")
     sys.exit(0)
 
