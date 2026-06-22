@@ -34,6 +34,7 @@ from src.env.intersection import (
     _VAULT_MOVEMENTS,
     Intersection,
 )
+from src.env.masking import barrier_crossing_mask, compute_mask
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NET_FILE = _REPO_ROOT / "config" / "network" / "intersection.net.xml"
@@ -101,6 +102,7 @@ class SUMOEnv(gym.Env):
         self._started = False
         self._intersection: Intersection | None = None
         self._last_action = 0
+        self._time_in_phase = 0.0  # green seconds the current phase has been active
         self._sim_time = 0.0
         self._loaded = 0
         self._departed = 0
@@ -143,6 +145,7 @@ class SUMOEnv(gym.Env):
             )
 
         self._last_action = 0
+        self._time_in_phase = 0.0
         self._sim_time = 0.0
         self._loaded = self._departed = self._arrived = 0
         traci.trafficlight.setRedYellowGreenState(
@@ -187,10 +190,34 @@ class SUMOEnv(gym.Env):
         reward = float(-np.abs(pressures).sum())
         if switched:
             reward -= self._switch_penalty
+
+        # Update the green timer for the NEXT mask (point: timer reflects state AFTER
+        # the yellow/all-red insertion). A switch resets it to the green run that
+        # actually elapsed this window; a hold accumulates the full window.
+        if switched:
+            transition_s = ix.yellow_s + (ix.all_red_s if ix.is_barrier_crossing(prev, action) else 0)
+            self._time_in_phase = float(max(0, self._decision_interval_s - transition_s))
+        else:
+            self._time_in_phase += self._decision_interval_s
         self._last_action = action
 
         obs = self._observe(pressures)
         return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
+
+    def get_action_mask(self) -> np.ndarray:
+        """Return the length-8 boolean action mask for the current decision point.
+
+        Forbids switching before min-green (10 s) and forces a switch at max-green
+        (60 s); free choice in between. ``mask.any()`` always holds.
+        """
+        ix = self._intersection
+        assert ix is not None, "get_action_mask() called before reset()"
+        return compute_mask(
+            self._last_action,
+            self._time_in_phase,
+            min_green=ix.min_green_s,
+            max_green=ix.max_green_s,
+        )
 
     def _advance(self, n_ticks: int, remaining: int) -> tuple[bool, int]:
         """Step the sim up to ``n_ticks`` (capped by ``remaining``), updating counters.
@@ -233,8 +260,15 @@ class SUMOEnv(gym.Env):
         return np.concatenate([norm.astype(np.float32), one_hot])
 
     def _info(self, done: bool = False) -> dict[str, Any]:
-        """Per-step info; on episode end, the T-01-03 gridlock-guard counters."""
-        info: dict[str, Any] = {"sim_time": self._sim_time, "phase": self._last_action}
+        """Per-step info: timer + action mask; on episode end, gridlock counters."""
+        assert self._intersection is not None
+        info: dict[str, Any] = {
+            "sim_time": self._sim_time,
+            "phase": self._last_action,
+            "time_in_phase": self._time_in_phase,
+            "mask": self.get_action_mask(),
+            "barrier_crossing": barrier_crossing_mask(self._intersection, self._last_action),
+        }
         if done:
             backlog = (self._loaded - self._departed) / self._loaded if self._loaded else 0.0
             info["episode"] = {

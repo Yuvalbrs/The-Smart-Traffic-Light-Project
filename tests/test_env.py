@@ -15,6 +15,7 @@ import pytest
 import traci
 from scripts.build_network import build_net
 from src.env.intersection import N_MOVEMENTS, Intersection
+from src.env.masking import barrier_crossing_mask, compute_mask
 from src.env.sumo_env import SUMOEnv
 
 
@@ -98,6 +99,81 @@ def test_step_conserves_decision_window_across_switches(tmp_path) -> None:
             _, _, terminated, truncated, info = env.step(action)
             assert not (terminated or truncated)
             assert info["sim_time"] == pytest.approx((k + 1) * 10)  # exactly 10 s/step
+    finally:
+        env.close()
+
+
+# --- T-02-02: action masking ---
+
+def test_compute_mask_three_regimes_and_invariant() -> None:
+    # pre-min-green: can only hold the current phase
+    m = compute_mask(3, 5, min_green=10, max_green=60)
+    assert m[3] and m.sum() == 1
+    # free window: every action valid
+    assert compute_mask(3, 20, min_green=10, max_green=60).all()
+    # max-green: must switch (current forbidden, the other 7 valid)
+    m = compute_mask(3, 60, min_green=10, max_green=60)
+    assert not m[3] and m.sum() == 7
+    # invariant: at least one valid action in every regime
+    for t in (0, 5, 10, 30, 60, 120):
+        assert compute_mask(2, t, min_green=10, max_green=60).any()
+
+
+def test_barrier_crossing_mask() -> None:
+    traci.start(["sumo", "-n", "config/network/intersection.net.xml", "--no-step-log", "true"])
+    try:
+        ix = Intersection.from_traci(traci, "C")
+        bc = barrier_crossing_mask(ix, 0)  # from NS phase 0
+        assert bc[4] and bc[5] and bc[6] and bc[7]  # -> EW group crosses
+        assert not bc[0] and not bc[1] and not bc[2] and not bc[3]  # within NS
+    finally:
+        traci.close()
+
+
+def test_env_mask_min_green_then_free_then_after_switch(tmp_path) -> None:
+    from scripts.build_routes import write_routes
+    from src.scenarios.config import load_all
+
+    scn = next(s for s in load_all() if s.id == "SCN-02")
+    route = write_routes(scn, 0, out_dir=tmp_path)
+    env = SUMOEnv(route, episode_length_s=600)
+    try:
+        env.reset()
+        # min-green not met at reset -> only the current phase (0) is valid
+        m = env.get_action_mask()
+        assert m.sum() == 1 and m[0]
+        # hold once -> 10 s green -> free choice; info mask matches the getter
+        _, _, _, _, info = env.step(0)
+        assert info["time_in_phase"] == 10
+        assert env.get_action_mask().all()
+        assert np.array_equal(info["mask"], env.get_action_mask())
+        # within-group switch spends 3 s yellow -> only 7 s green ran -> must hold next
+        _, _, _, _, info = env.step(1)
+        assert info["time_in_phase"] == 7
+        m = env.get_action_mask()
+        assert m.sum() == 1 and m[1]
+    finally:
+        env.close()
+
+
+def test_env_forces_switch_at_max_green(tmp_path) -> None:
+    from scripts.build_routes import write_routes
+    from src.scenarios.config import load_all
+
+    scn = next(s for s in load_all() if s.id == "SCN-02")
+    route = write_routes(scn, 0, out_dir=tmp_path)
+    env = SUMOEnv(route, episode_length_s=600)
+    try:
+        env.reset()
+        forbidden = False
+        for _ in range(8):  # keep holding phase 0
+            _, _, _, _, info = env.step(0)
+            if not info["mask"][0]:
+                forbidden = True
+                assert info["time_in_phase"] >= 60  # max-green reached
+                assert info["mask"].sum() == 7  # all but the current
+                break
+        assert forbidden, "max-green never forced a switch"
     finally:
         env.close()
 

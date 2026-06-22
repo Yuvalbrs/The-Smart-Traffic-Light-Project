@@ -58,6 +58,8 @@ class Intersection:
         n_links: int,
         yellow_s: int,
         all_red_s: int,
+        min_green_s: int,
+        max_green_s: int,
     ) -> None:
         self.tls_id = tls_id
         self.movement_ids = movement_ids  # canonical M0..M11 order
@@ -70,6 +72,8 @@ class Intersection:
         self._n_links = n_links
         self.yellow_s = yellow_s
         self.all_red_s = all_red_s
+        self.min_green_s = min_green_s
+        self.max_green_s = max_green_s
         # free (uncontrolled right-turn) links stay green through every transition
         self._free_links: set[int] = set()
         for mid in free_movements:
@@ -99,6 +103,10 @@ class Intersection:
         transitions = spec.get("transitions", {})
         yellow_s = int(transitions.get("yellow_s", 3))
         all_red_s = int(transitions.get("all_red_s", 2))
+        safety = spec.get("safety", {})
+        min_green_s = int(safety.get("min_green_s", 10))
+        # max-green == max-red anti-starvation bound (60s, safety-masking.md / decisions.md)
+        max_green_s = int(safety.get("max_green_s", safety.get("max_red_s", 60)))
 
         controlled_links = conn.trafficlight.getControlledLinks(tls_id)
         n_links = len(controlled_links)
@@ -128,6 +136,8 @@ class Intersection:
             n_links=n_links,
             yellow_s=yellow_s,
             all_red_s=all_red_s,
+            min_green_s=min_green_s,
+            max_green_s=max_green_s,
         )
 
     # --- pressure (unnormalized) ---
