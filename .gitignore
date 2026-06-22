@@ -17,6 +17,7 @@ sumo-gui.log
 # Generated data & artifacts (large / reproducible)
 data/
 runs/
+config/routes/        # .rou.xml generated deterministically by scripts/build_routes.py (T-01-08)
 checkpoints/
 *.sqlite
 *.sqlite-wal
