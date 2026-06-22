@@ -1,0 +1,21 @@
+# SCN-01 — Uniform light (T-01-01)
+# Demand model per notes/03-simulation.md §4.5. Per-approach arrival rates feed
+# the route generator (T-01-08); turn_split below is consumed there too.
+id: SCN-01
+name: Uniform light
+description: Low, symmetric demand on both axes. The easy regime / sanity floor.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0          # INCLUDE_HEAVY_VEHICLES default false (03-sim §4.5)
+
+# ASSUMPTION (not in any locked spec — confirm): how each approach's arrivals
+# split across its 3 turns. Routes (T-01-08) may override per-approach later.
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+# N/S share one profile, E/W another (the demand table is per-axis-pair).
+demand:
+  ns: {profile: constant, vph: 200}
+  ew: {profile: constant, vph: 200}

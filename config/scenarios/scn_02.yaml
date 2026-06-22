@@ -1,0 +1,17 @@
+# SCN-02 — Uniform heavy (T-01-01)
+# Demand model per notes/03-simulation.md §4.5.
+id: SCN-02
+name: Uniform heavy
+description: High, symmetric demand on both axes. Saturated-but-stable stress regime.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: constant, vph: 600}
+  ew: {profile: constant, vph: 600}

@@ -1,0 +1,18 @@
+# SCN-05 — Shifting demand (T-01-01)
+# Demand model per notes/03-simulation.md §4.5: both axes sinusoidal 200-600 vph
+# over a 1-hour period, E/W offset 90deg from N/S (peaks are out of phase).
+id: SCN-05
+name: Shifting demand
+description: Both axes oscillate 200-600 vph, 90deg out of phase. Continuous, non-stationary load.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: sinusoidal, vph_min: 200, vph_max: 600, period_s: 3600, phase_offset_deg: 0}
+  ew: {profile: sinusoidal, vph_min: 200, vph_max: 600, period_s: 3600, phase_offset_deg: 90}

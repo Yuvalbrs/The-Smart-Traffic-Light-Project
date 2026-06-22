@@ -1,0 +1,18 @@
+# SCN-03 — Rush hour peak (T-01-01)
+# Demand model per notes/03-simulation.md §4.5: N/S decays 800->300 while E/W
+# rises 200->400, both over the first 30 min (ramp_s), then hold to episode end.
+id: SCN-03
+name: Rush hour peak
+description: Opposing ramps — N/S peak decays as E/W builds. Tests adaptation to a shifting load.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: ramp, vph_start: 800, vph_end: 300, ramp_s: 1800}
+  ew: {profile: ramp, vph_start: 200, vph_end: 400, ramp_s: 1800}
