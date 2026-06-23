@@ -202,6 +202,32 @@ class Intersection:
             out[i] = inc - outc
         return out
 
+    def movement_queues(self, conn: Any) -> np.ndarray:
+        """Return the 12 per-movement queue lengths (halting count), M0..M11 order.
+
+        Queue = ``lane.getLastStepHaltingNumber`` summed over a movement's incoming
+        lanes (halting = speed < 0.1 m/s, matching the KPI threshold). This is the
+        LSTM forecast target / input feature - distinct from pressure's vehicle
+        *count* (research-sumo.md "queue vs count" gotcha).
+        """
+        halting = conn.lane.getLastStepHaltingNumber
+        out = np.empty(N_MOVEMENTS, dtype=np.float64)
+        for i, mid in enumerate(self.movement_ids):
+            out[i] = sum(halting(l) for l in self._in_lanes[mid])
+        return out
+
+    def movement_counts(self, conn: Any) -> np.ndarray:
+        """Return the 12 per-movement incoming vehicle counts, M0..M11 order.
+
+        Count = ``lane.getLastStepVehicleNumber`` summed over a movement's incoming
+        lanes (an LSTM input feature alongside the queue).
+        """
+        count = conn.lane.getLastStepVehicleNumber
+        out = np.empty(N_MOVEMENTS, dtype=np.float64)
+        for i, mid in enumerate(self.movement_ids):
+            out[i] = sum(count(l) for l in self._in_lanes[mid])
+        return out
+
     # --- green-state synthesis for an action ---
 
     def _links_for(self, movements: list[str]) -> set[int]:

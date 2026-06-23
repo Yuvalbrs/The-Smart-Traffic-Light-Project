@@ -234,6 +234,16 @@ class SUMOEnv(gym.Env):
         obs = self._observe(pressures)
         return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
 
+    def movement_features(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(queue[12], count[12])`` per movement at the current state.
+
+        The per-step LSTM features (T-01-05 data generation): queue is the halting
+        count, count is the vehicle count, both over each movement's incoming lanes.
+        """
+        ix = self._intersection
+        assert ix is not None, "movement_features() called before reset()"
+        return ix.movement_queues(traci), ix.movement_counts(traci)
+
     def _step_actuated(
         self,
     ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
