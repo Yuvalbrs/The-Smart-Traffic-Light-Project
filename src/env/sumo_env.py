@@ -35,6 +35,7 @@ from src.env.intersection import (
     Intersection,
 )
 from src.env.masking import barrier_crossing_mask, compute_mask
+from src.trace import JsonlWriter, MovementResolver, build_sim_frame
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NET_FILE = _REPO_ROOT / "config" / "network" / "intersection.net.xml"
@@ -77,6 +78,11 @@ class SUMOEnv(gym.Env):
     additional_file : str or Path, optional
         The actuated additional-file (program + detectors). Defaults to the
         committed ``actuated.add.xml`` when ``signal_mode == "actuated"``.
+    trace_path : str or Path, optional
+        When set, write one ``sim_frame`` per simulated second to this JSONL file
+        (the T-01-04 tracer). The file is rewritten fresh each ``reset``. Off by
+        default (no tracing overhead). Consumed by the KPI extractor, replay, the
+        dashboard, and the repro smoke test (T-01-07).
     """
 
     metadata = {"render_modes": []}
@@ -95,6 +101,7 @@ class SUMOEnv(gym.Env):
         movements_path: str | Path = _VAULT_MOVEMENTS,
         signal_mode: str = "rl",
         additional_file: str | Path | None = None,
+        trace_path: str | Path | None = None,
     ) -> None:
         super().__init__()
         if signal_mode not in ("rl", "actuated"):
@@ -114,6 +121,14 @@ class SUMOEnv(gym.Env):
             if additional_file is not None
             else (_ACTUATED_ADD_FILE if signal_mode == "actuated" else None)
         )
+        # optional per-second JSONL tracing (T-01-04 tracer wired in): the eval
+        # runner, replay mode, dashboard, and the repro smoke test all consume this.
+        self._trace_path = Path(trace_path) if trace_path is not None else None
+        self._tracer: JsonlWriter | None = None
+        self._resolver: MovementResolver | None = None
+        self._seq = 0
+        self._episode_id = 0
+        self._trace_phase = 0  # NEMA phase stamped on frames in the current window
 
         self.action_space = gym.spaces.Discrete(N_PHASES)
         self.observation_space = gym.spaces.Box(
@@ -168,8 +183,18 @@ class SUMOEnv(gym.Env):
                 traci, self._tls_id, movements_path=self._movements_path
             )
 
+        if self._trace_path is not None:  # fresh JSONL trace per episode
+            if self._resolver is None:
+                self._resolver = MovementResolver.from_traci(traci, self._tls_id)
+            if self._tracer is not None:
+                self._tracer.close()
+            self._tracer = JsonlWriter(self._trace_path).__enter__()
+            self._seq = 0
+            self._episode_id += 1
+
         self._last_action = 0
         self._time_in_phase = 0.0
+        self._trace_phase = 0
         self._sim_time = 0.0
         self._loaded = self._departed = self._arrived = 0
         if self._signal_mode == "actuated":
@@ -197,6 +222,7 @@ class SUMOEnv(gym.Env):
         if self._signal_mode == "actuated":
             return self._step_actuated()
         action = int(action)
+        self._trace_phase = action  # frames in this window carry the chosen phase
         ix = self._intersection
         prev = self._last_action
         switched = action != prev
@@ -256,6 +282,7 @@ class SUMOEnv(gym.Env):
         """
         ix = self._intersection
         assert ix is not None
+        self._trace_phase = self._last_action  # SUMO owns the lights; stamp the live phase
         terminated, _ = self._advance(self._decision_interval_s, self._decision_interval_s)
         truncated = (not terminated) and self._sim_time >= self._episode_length_s
         pressures = ix.pressures(traci)
@@ -298,14 +325,29 @@ class SUMOEnv(gym.Env):
             self._loaded += traci.simulation.getLoadedNumber()
             self._departed += traci.simulation.getDepartedNumber()
             self._arrived += traci.simulation.getArrivedNumber()
+            if self._tracer is not None:  # one 1 Hz sim_frame per tick
+                self._tracer.write(self._build_frame())
             remaining -= 1
             if traci.simulation.getMinExpectedNumber() == 0:  # B3 guard #2
                 terminated = True
                 break
         return terminated, remaining
 
+    def _build_frame(self) -> dict[str, Any]:
+        """Assemble + count one ``sim_frame`` for the current tick (tracing on)."""
+        assert self._resolver is not None
+        frame = build_sim_frame(
+            traci, self._tls_id, seq=self._seq, episode_id=self._episode_id,
+            phase_index=self._trace_phase, resolver=self._resolver, sim_time=self._sim_time,
+        )
+        self._seq += 1
+        return frame
+
     def close(self) -> None:
-        """Close the TraCI connection (idempotent)."""
+        """Close the trace writer + TraCI connection (idempotent)."""
+        if self._tracer is not None:
+            self._tracer.close()
+            self._tracer = None
         if self._started:
             try:
                 traci.close()

@@ -1,0 +1,8 @@
+{
+  "sha256": "b0ced69fad5a09384593976d1389b5a33c80890e167082267c8d3cb9e36f48f0",
+  "n_frames": 300,
+  "sumo_version": "Eclipse SUMO sumo 1.27.0",
+  "scenario": "SCN-02",
+  "seed": 0,
+  "episode_length_s": 300
+}
