@@ -38,6 +38,8 @@ from src.env.masking import barrier_crossing_mask, compute_mask
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NET_FILE = _REPO_ROOT / "config" / "network" / "intersection.net.xml"
+_ACTUATED_ADD_FILE = _REPO_ROOT / "config" / "network" / "actuated.add.xml"
+_ACTUATED_PROGRAM = "actuated"
 
 _OBS_DIM = 20
 _PRESSURE_CLIP = 10.0  # clip pressures to +/-10 then /10 -> [-1, 1] (state-space.md)
@@ -66,6 +68,15 @@ class SUMOEnv(gym.Env):
         Launch ``sumo-gui`` instead of headless ``sumo``. Default ``False``.
     movements_path : str or Path, optional
         Path to ``movements.yaml`` (vault SSOT by default).
+    signal_mode : str, optional
+        ``"rl"`` (default) - Python commands the lights every step (DQN + the
+        Webster/max-pressure baselines). ``"actuated"`` - SUMO's own actuated
+        program drives the lights (T-02-06): the env loads the actuated
+        additional-file, switches ``C`` to it, and ``step`` just advances the
+        window and reads metrics; the ``action`` argument is ignored.
+    additional_file : str or Path, optional
+        The actuated additional-file (program + detectors). Defaults to the
+        committed ``actuated.add.xml`` when ``signal_mode == "actuated"``.
     """
 
     metadata = {"render_modes": []}
@@ -82,8 +93,12 @@ class SUMOEnv(gym.Env):
         sumo_seed: int = 42,
         use_gui: bool = False,
         movements_path: str | Path = _VAULT_MOVEMENTS,
+        signal_mode: str = "rl",
+        additional_file: str | Path | None = None,
     ) -> None:
         super().__init__()
+        if signal_mode not in ("rl", "actuated"):
+            raise ValueError(f"signal_mode must be 'rl' or 'actuated', got {signal_mode!r}")
         self._route_file = Path(route_file)
         self._net_file = Path(net_file)
         self._tls_id = tls_id
@@ -93,6 +108,12 @@ class SUMOEnv(gym.Env):
         self._sumo_seed = sumo_seed
         self._use_gui = use_gui
         self._movements_path = movements_path
+        self._signal_mode = signal_mode
+        self._additional_file = (
+            Path(additional_file)
+            if additional_file is not None
+            else (_ACTUATED_ADD_FILE if signal_mode == "actuated" else None)
+        )
 
         self.action_space = gym.spaces.Discrete(N_PHASES)
         self.observation_space = gym.spaces.Box(
@@ -112,7 +133,7 @@ class SUMOEnv(gym.Env):
 
     def _sumo_args(self) -> list[str]:
         """The deterministic SUMO argument list (no binary), shared by start/load."""
-        return [
+        args = [
             "-n", str(self._net_file),
             "-r", str(self._route_file),
             "--step-length", "1.0",
@@ -123,6 +144,9 @@ class SUMOEnv(gym.Env):
             "--no-step-log", "true",
             "--no-warnings", "true",
         ]
+        if self._additional_file is not None:  # actuated program + detectors
+            args += ["-a", str(self._additional_file)]
+        return args
 
     # --- Gym API ---
 
@@ -148,9 +172,13 @@ class SUMOEnv(gym.Env):
         self._time_in_phase = 0.0
         self._sim_time = 0.0
         self._loaded = self._departed = self._arrived = 0
-        traci.trafficlight.setRedYellowGreenState(
-            self._tls_id, self._intersection.green_state(0)
-        )
+        if self._signal_mode == "actuated":
+            # hand the lights to SUMO's actuated program; we never command them.
+            traci.trafficlight.setProgram(self._tls_id, _ACTUATED_PROGRAM)
+        else:
+            traci.trafficlight.setRedYellowGreenState(
+                self._tls_id, self._intersection.green_state(0)
+            )
         return self._observe(), self._info()
 
     def step(
@@ -166,6 +194,8 @@ class SUMOEnv(gym.Env):
         """
         if self._intersection is None:
             raise RuntimeError("step() called before reset()")
+        if self._signal_mode == "actuated":
+            return self._step_actuated()
         action = int(action)
         ix = self._intersection
         prev = self._last_action
@@ -204,14 +234,40 @@ class SUMOEnv(gym.Env):
         obs = self._observe(pressures)
         return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
 
+    def _step_actuated(
+        self,
+    ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        """Advance one decision window while SUMO's actuated program drives ``C``.
+
+        The env issues no light commands and applies no mask/transition logic - it
+        just steps the window and reads the same pressures/metrics every other
+        controller is scored on. Reward carries no switch penalty (the agent makes
+        no choice here). The phase one-hot is recovered from SUMO's live state.
+        """
+        ix = self._intersection
+        assert ix is not None
+        terminated, _ = self._advance(self._decision_interval_s, self._decision_interval_s)
+        truncated = (not terminated) and self._sim_time >= self._episode_length_s
+        pressures = ix.pressures(traci)
+        reward = float(-np.abs(pressures).sum())
+        live = traci.trafficlight.getRedYellowGreenState(self._tls_id)
+        action = ix.action_for_state(live)  # None during yellow/all-red -> hold last
+        if action is not None:
+            self._last_action = action
+        obs = self._observe(pressures)
+        return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
+
     def get_action_mask(self) -> np.ndarray:
         """Return the length-8 boolean action mask for the current decision point.
 
         Forbids switching before min-green (10 s) and forces a switch at max-green
-        (60 s); free choice in between. ``mask.any()`` always holds.
+        (60 s); free choice in between. ``mask.any()`` always holds. In actuated
+        mode the mask is meaningless (SUMO owns the timing) - all actions read valid.
         """
         ix = self._intersection
         assert ix is not None, "get_action_mask() called before reset()"
+        if self._signal_mode == "actuated":
+            return np.ones(N_PHASES, dtype=bool)
         return compute_mask(
             self._last_action,
             self._time_in_phase,

@@ -5,11 +5,12 @@ Three locked baselines span the difficulty spectrum, all driving the same
 
 - :mod:`src.baselines.webster` - Webster's classical fixed-time controller (floor).
 - :mod:`src.baselines.max_pressure` - greedy max-pressure (strong rule-based).
-- SUMO actuated (T-02-06) - to come.
+- :mod:`src.baselines.actuated` - SUMO's built-in actuated control (real-world analog).
 """
 
 from __future__ import annotations
 
+from src.baselines.actuated import SUMOActuatedController
 from src.baselines.max_pressure import MaxPressureController
 from src.baselines.webster import (
     WebsterController,
@@ -20,6 +21,7 @@ from src.baselines.webster import (
 
 __all__ = [
     "MaxPressureController",
+    "SUMOActuatedController",
     "WebsterController",
     "WebsterPlan",
     "compute_webster_plan",

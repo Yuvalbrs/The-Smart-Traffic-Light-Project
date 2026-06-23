@@ -161,6 +161,32 @@ class Intersection:
             max_green_s=max_green_s,
         )
 
+    @property
+    def controlled_in_lanes(self) -> list[str]:
+        """Unique incoming lanes of the controlled (signalized) movements, sorted.
+
+        The actuated baseline (T-02-06) places one gap detector per such lane; the
+        free right-turn lanes are excluded (they are green in every phase and never
+        gate the actuated logic).
+        """
+        lanes: set[str] = set()
+        for mid in self.movement_ids:
+            if mid not in self._free:
+                lanes.update(self._in_lanes[mid])
+        return sorted(lanes)
+
+    def action_for_state(self, ryg: str) -> int | None:
+        """Return the action whose green-state equals ``ryg``, or ``None``.
+
+        Used in actuated mode to recover our 0..7 phase one-hot from SUMO's live
+        light string (which cycles through an 18-phase actuated program, not our
+        action indices). Yellow/all-red strings match no green and return ``None``.
+        """
+        for action in range(N_PHASES):
+            if self.green_state(action) == ryg:
+                return action
+        return None
+
     # --- pressure (unnormalized) ---
 
     def pressures(self, conn: Any) -> np.ndarray:
