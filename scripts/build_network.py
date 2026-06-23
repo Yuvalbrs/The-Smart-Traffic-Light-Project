@@ -28,6 +28,7 @@ Sections 4.3-4.4 carry a STALE, contradictory movement order - do not use it
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -69,7 +70,13 @@ LANE_FOR_TURN: dict[str, int] = {"left": 2, "through": 1, "right": 0}
 
 def build_net() -> None:
     """Compile the network with ``netconvert`` (normalization disabled so the
-    centre node stays at the origin and ``netOffset`` is ``(0, 0)``)."""
+    centre node stays at the origin and ``netOffset`` is ``(0, 0)``).
+
+    The output is made byte-stable across rebuilds by normalizing the only volatile
+    field netconvert writes - the ``generated on <timestamp>`` line in the header
+    comment - so regenerating the net (every test run / data-gen run does) never
+    dirties git with a meaningless timestamp diff.
+    """
     cmd = [
         checkBinary("netconvert"),
         "--node-files", str(_NET_DIR / "intersection.nod.xml"),
@@ -81,6 +88,20 @@ def build_net() -> None:
         "--offset.disable-normalization", "true",
     ]
     subprocess.run(cmd, check=True, capture_output=True, text=True)
+    _normalize_generated_timestamp(_NET_FILE)
+
+
+def _normalize_generated_timestamp(net_file: Path) -> None:
+    """Replace the netconvert ``generated on <timestamp>`` date with a fixed token."""
+    text = net_file.read_text(encoding="utf-8")
+    normalized = re.sub(
+        r"(<!-- generated on ).*?( by Eclipse SUMO netconvert)",
+        r"\1(date omitted for reproducibility)\2",
+        text,
+        count=1,
+    )
+    if normalized != text:
+        net_file.write_text(normalized, encoding="utf-8")
 
 
 def assert_net_offset() -> None:
