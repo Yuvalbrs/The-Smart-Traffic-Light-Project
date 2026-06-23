@@ -41,6 +41,27 @@ N_MOVEMENTS = 12
 N_PHASES = 8
 
 
+def load_phase_movements(
+    movements_path: str | Path = _VAULT_MOVEMENTS,
+) -> dict[int, tuple[int, ...]]:
+    """Map each action (0..7) to the canonical movement indices (0..11) it greens.
+
+    A pure read of the ``movements.yaml`` SSOT - no live SUMO connection needed,
+    unlike :meth:`Intersection.from_traci` (which also resolves link indices). The
+    max-pressure baseline (T-02-05) uses this to sum pressure over each phase's
+    served movements; it reads the same ``phases[p]["green"]`` sets the env uses,
+    so "which movements a phase serves" has a single definition.
+
+    Free right turns (``controlled: false``) are not in any phase's ``green`` and
+    so are excluded here, exactly as in the env's green-state synthesis.
+    """
+    spec = yaml.safe_load(Path(movements_path).read_text(encoding="utf-8"))
+    movement_ids = sorted(spec["movements"], key=lambda m: int(m[1:]))  # M0..M11
+    index = {mid: i for i, mid in enumerate(movement_ids)}
+    phases = spec["phases"]
+    return {int(p): tuple(index[m] for m in phases[p]["green"]) for p in phases}
+
+
 class Intersection:
     """Movements, phases, pressure, and per-action green-state for one TLS."""
 
