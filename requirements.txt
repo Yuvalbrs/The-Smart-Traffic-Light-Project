@@ -2,12 +2,15 @@
 # Versions are loosely pinned for now; exact versions get frozen into the repro
 # contract (`data_version`) once it is active. See vault: notes/research-eval-repro.
 #
-# NOTE: `torch` is intentionally NOT listed here. T-00-01 does not need it, and the
-# CUDA build must be installed deliberately with the correct index URL for the GPU.
+# NOTE: `torch` is intentionally NOT pinned here. The CUDA build must be installed
+# deliberately with the correct index URL for the GPU. From T-02-09 (pilot) on it is
+# required: CPU build `pip install torch --index-url https://download.pytorch.org/whl/cpu`
+# for benchmarking / the small LSTM; swap to the matching CUDA build for real training.
 # See README -> "GPU / torch".
 
 traci
 sumolib
+libsumo==1.27.0  # in-process SUMO backend (LIBSUMO_AS_TRACI=1); pin to the SUMO version
 numpy
 gymnasium
 pyyaml          # load specs/movements.yaml for the network-build assertion (T-01-02)
