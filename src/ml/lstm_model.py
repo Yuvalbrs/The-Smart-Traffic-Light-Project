@@ -66,11 +66,17 @@ class LSTMForecaster(nn.Module):
         self.input_std.copy_(torch.clamp(std, min=1e-6))  # guard zero-variance features
 
     def forward(self, x: Tensor) -> Tensor:
-        # x: (B, 12, 24), raw units -> standardize -> LSTM -> raw queue forecast
-        x = (x - self.input_mean) / self.input_std
-        _, (h_n, _) = self.lstm(x)        # h_n: (num_layers, B, hidden)
-        out = self.head(h_n[-1])          # final layer's hidden -> (B, 36)
-        return out.view(-1, HORIZON, N_MOVEMENTS)  # (B, 3, 12)
+        # x: (B, 12, 24), raw units.
+        # RESIDUAL forecast (ADR-005): predict the CHANGE from the current queue, not
+        # the absolute queue. forecast = current_queue + learned_delta. This anchors
+        # the model to the present, so it starts at parity with persistence and tracks
+        # any queue magnitude - fixing the held-out distribution-shift failure of the
+        # original direct-forecast design (open-items E1/C1).
+        current_queue = x[:, -1, :N_MOVEMENTS]            # (B, 12), raw last-step queue
+        xn = (x - self.input_mean) / self.input_std
+        _, (h_n, _) = self.lstm(xn)                       # h_n: (num_layers, B, hidden)
+        delta = self.head(h_n[-1]).view(-1, HORIZON, N_MOVEMENTS)  # (B, 3, 12)
+        return current_queue.unsqueeze(1) + delta         # (B, 3, 12)
 
 
 def persistence_forecast(x: Tensor) -> Tensor:

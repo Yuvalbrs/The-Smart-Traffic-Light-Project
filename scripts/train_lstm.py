@@ -167,6 +167,7 @@ def main() -> None:
         "input_size": INPUT_SIZE, "hidden": HIDDEN_SIZE, "layers": NUM_LAYERS,
         "dropout": DROPOUT, "horizon": HORIZON, "lr": args.lr, "batch": args.batch,
         "max_epochs": args.max_epochs, "patience": args.patience,
+        "head": "residual",  # ADR-005: forecast = current_queue + delta
     }
     data_v = _dataset_data_version(_DATA_DIR)
     lstm_v = lstm_version(
