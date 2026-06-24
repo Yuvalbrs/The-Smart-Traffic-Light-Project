@@ -27,7 +27,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.ml.lstm_data import _DATA_DIR, make_dataloaders
+from src.ml.lstm_data import _DATA_DIR, DEFAULT_TARGET_OFFSETS, make_dataloaders
 from src.ml.lstm_model import (
     DROPOUT,
     HIDDEN_SIZE,
@@ -140,10 +140,15 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--target-offsets", default=",".join(map(str, DEFAULT_TARGET_OFFSETS)),
+        help="forecast points as steps ahead, comma-separated (default 6,9,12 = 60/90/120s)",
+    )
     args = parser.parse_args()
 
+    offsets = tuple(int(o) for o in args.target_offsets.split(","))
     torch.manual_seed(args.seed)  # deterministic init + shuffling
-    loaders = make_dataloaders(_DATA_DIR, batch_size=args.batch)
+    loaders = make_dataloaders(_DATA_DIR, batch_size=args.batch, target_offsets=offsets)
     sizes = {k: len(v.dataset) for k, v in loaders.items()}
     print(f"[lstm-train] windows: {sizes}")
 
@@ -168,6 +173,7 @@ def main() -> None:
         "dropout": DROPOUT, "horizon": HORIZON, "lr": args.lr, "batch": args.batch,
         "max_epochs": args.max_epochs, "patience": args.patience,
         "head": "residual",  # ADR-005: forecast = current_queue + delta
+        "target_offsets": list(offsets),  # ADR-006: 60/90/120 s horizon
     }
     data_v = _dataset_data_version(_DATA_DIR)
     lstm_v = lstm_version(
@@ -186,6 +192,7 @@ def main() -> None:
     )
     report = {
         "lstm_version": lstm_v, "data_version": data_v, "seed": args.seed,
+        "target_offsets_steps": list(offsets), "horizon_seconds": [o * 10 for o in offsets],
         "window_sizes": sizes, "epochs_run": len(history),
         "val_mse": val_mse, "test_mse": test_mse,
         "skill_scores_val": gate_metrics["skill_scores"], "r2_val": gate_metrics["r2"],
@@ -195,7 +202,8 @@ def main() -> None:
 
     ss = gate_metrics["skill_scores"]
     print(f"[lstm-train] epochs={len(history)} val_mse={val_mse:.4f} test_mse={test_mse:.4f} r2={gate_metrics['r2']:.3f}")
-    print(f"[lstm-train] skill: SS@h+1={ss[0]:.3f} SS@h+2={ss[1]:.3f} SS@h+3={ss[2]:.3f}")
+    secs = [o * 10 for o in offsets]
+    print(f"[lstm-train] skill @ {secs}s: SS={ss[0]:.3f}/{ss[1]:.3f}/{ss[2]:.3f}")
     print(f"[lstm-train] FREEZE GATE: {decision.verdict} (ship={decision.ship})")
     print(f"             {decision.reason}")
     print(f"[lstm-train] OK -> {ckpt_path.relative_to(_REPO_ROOT)}")

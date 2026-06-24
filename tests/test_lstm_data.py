@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from src.ml.lstm_data import (
+    DEFAULT_TARGET_OFFSETS,
     HORIZON,
     INPUT_LEN,
     N_FEATURES,
@@ -24,6 +25,10 @@ from src.ml.lstm_data import (
     make_dataloaders,
     split_sizes,
 )
+
+_SPAN = INPUT_LEN + max(DEFAULT_TARGET_OFFSETS)  # rows consumed by one window
+_N_ROWS = 40                                     # per synthetic file -> _N_ROWS-_SPAN+1 windows
+_WINDOWS_PER_FILE = _N_ROWS - _SPAN + 1
 
 _HEADER = (
     ["step", "sim_time"]
@@ -45,11 +50,11 @@ def _write_csv(path, n_rows: int) -> None:
 
 @pytest.fixture()
 def data_dir(tmp_path):
-    """One CSV per split scenario; 20 rows -> 20-15+1 = 6 windows each."""
+    """One CSV per split scenario; _N_ROWS rows -> _WINDOWS_PER_FILE windows each."""
     for scenario_ids in SPLITS.values():
         for scenario_id in scenario_ids:
             prefix = f"scn_{scenario_id.split('-')[1]}"
-            _write_csv(tmp_path / f"{prefix}_seed_00.csv", n_rows=20)
+            _write_csv(tmp_path / f"{prefix}_seed_00.csv", n_rows=_N_ROWS)
     return tmp_path
 
 
@@ -62,20 +67,21 @@ def test_shapes_and_dtypes(data_dir) -> None:
 
 
 def test_window_values_are_correctly_sliced(data_dir) -> None:
-    """First window: input rows 0..11, target queue rows 12..14."""
+    """First window: input rows 0..11; targets at last-history-step + each offset."""
     ds = LSTMDataset([data_dir / "scn_01_seed_00.csv"])
     x, y = ds[0]
     # input: queue feature (col 0) equals the row index; count (col 12) = 100 + row
     assert x[0, 0].item() == 0 and x[INPUT_LEN - 1, 0].item() == INPUT_LEN - 1
     assert x[0, N_MOVEMENTS].item() == 100.0
-    # target: queue of rows 12, 13, 14
-    assert [y[h, 0].item() for h in range(HORIZON)] == [12.0, 13.0, 14.0]
+    # target rows = (last history row = INPUT_LEN-1) + offset; queue value == row index
+    expected = [float(INPUT_LEN - 1 + o) for o in DEFAULT_TARGET_OFFSETS]
+    assert [y[h, 0].item() for h in range(HORIZON)] == expected
 
 
 def test_windows_per_file_count(data_dir) -> None:
-    """20-row file -> exactly 6 windows; train has 3 scenarios x 1 file = 18."""
-    assert len(LSTMDataset([data_dir / "scn_01_seed_00.csv"])) == 20 - (INPUT_LEN + HORIZON) + 1
-    assert len(load_split("train", data_dir)) == 3 * 6
+    """One file -> _WINDOWS_PER_FILE windows; train has 3 scenarios x 1 file."""
+    assert len(LSTMDataset([data_dir / "scn_01_seed_00.csv"])) == _WINDOWS_PER_FILE
+    assert len(load_split("train", data_dir)) == 3 * _WINDOWS_PER_FILE
 
 
 def test_no_leakage_across_files_or_splits(data_dir) -> None:
@@ -107,7 +113,9 @@ def test_dataloaders_batch(data_dir) -> None:
 
 def test_split_sizes_documented(data_dir) -> None:
     sizes = split_sizes(data_dir)
-    assert sizes == {"train": 18, "val": 6, "test": 6}
+    assert sizes == {
+        "train": 3 * _WINDOWS_PER_FILE, "val": _WINDOWS_PER_FILE, "test": _WINDOWS_PER_FILE,
+    }
 
 
 def test_real_data_if_present() -> None:

@@ -5,8 +5,9 @@ the supervised sequences the forecaster trains on (``lstm-forecasting.md``):
 
 * **input**  ``(12, 24)`` - 12 history steps (120 sim-s) x 24 features per step
   (12 per-movement queue lengths + 12 per-movement vehicle counts);
-* **target** ``(3, 12)``  - the next 3 steps (30 sim-s) of **queue** per movement
-  (counts are an input feature only, never forecast - lstm-forecasting.md).
+* **target** ``(3, 12)``  - **queue** per movement at 3 future points (ADR-006:
+  60/90/120 s ahead, ``DEFAULT_TARGET_OFFSETS``; counts are an input feature only,
+  never forecast - lstm-forecasting.md).
 
 CSV columns (the T-01-05 header): ``step, sim_time, q_M0..q_M11, c_M0..c_M11`` ->
 the 24 features are columns ``[2:26]`` in order ``[q0..q11, c0..c11]``; the queue
@@ -15,9 +16,8 @@ target is the first 12 of those.
 PINNED (DoD: no cross-reference to "Chat 2"):
 
 * ``INPUT_LEN = 12``  history steps;
-* ``HORIZON   = 3``   forecast steps;
-* ``STRIDE    = 1``   one window per start row (=> ~346 windows/360-row file,
-  ~10k train sequences, matching lstm-forecasting.md's data-volume note).
+* ``DEFAULT_TARGET_OFFSETS = (6, 9, 12)``  the 3 forecast points (steps ahead);
+* ``STRIDE    = 1``   one window per start row.
 
 Split is **scenario-level, not random-window** (lstm-forecasting.md "Why
 scenario-level split"): train SCN-01/02/03, val SCN-04, test SCN-05. Windows are
@@ -43,11 +43,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DATA_DIR = _REPO_ROOT / "data" / "lstm"
 
 INPUT_LEN = 12
-HORIZON = 3
+HORIZON = 3            # number of forecast points (head outputs 3 x 12 = 36)
 N_MOVEMENTS = 12
-N_FEATURES = 24  # 12 queue + 12 count
+N_FEATURES = 24       # 12 queue + 12 count
 STRIDE = 1
-_WINDOW_SPAN = INPUT_LEN + HORIZON  # rows consumed by one (input, target) pair
+
+# Forecast points as STEPS ahead of the last history step (1 step = 10 s). ADR-006:
+# the locked 10/20/30 s design (offsets 1,2,3) was near-unpredictable (queues barely
+# move in 10 s -> persistence unbeatable). A horizon sweep showed skill grows with
+# lead time; 60/90/120 s gives the forecaster real, non-redundant signal (val skill
+# ~+0.07/+0.10/+0.12, test ~+0.14/+0.18/+0.22). 3 points kept -> 36-dim forecast, so
+# the hybrid state stays 56-dim (no DQN-side change).
+DEFAULT_TARGET_OFFSETS: tuple[int, ...] = (6, 9, 12)
 
 # Scenario-level split (lstm-forecasting.md "Training data" table). Disjoint by
 # construction - asserted in the leakage test.
@@ -82,21 +89,28 @@ def _load_features(path: Path) -> np.ndarray:
     return data[:, 2:]  # drop step + sim_time -> the 24 features
 
 
-def _window_file(feats: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _window_file(
+    feats: np.ndarray, target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS
+) -> tuple[np.ndarray, np.ndarray]:
     """Slide a window over ONE file's features -> ``(X, Y)``.
 
-    ``X`` is ``(w, 12, 24)``; ``Y`` is ``(w, 3, 12)`` (queue = first 12 features of
-    the 3 future rows). Windows never reach past ``len(feats)``, so they never span
-    into another file when callers concatenate per-file results.
+    ``X`` is ``(w, 12, 24)``; ``Y`` is ``(w, 3, 12)`` (queue = first 12 features at
+    each forecast step ``last_history_step + offset``). Windows never reach past
+    ``len(feats)``, so they never span into another file when callers concatenate
+    per-file results.
     """
     n = len(feats)
-    starts = range(0, n - _WINDOW_SPAN + 1, STRIDE)
+    span = INPUT_LEN + max(target_offsets)  # last row needed = i+INPUT_LEN-1+max_off
+    starts = range(0, n - span + 1, STRIDE)
     xs = [feats[i : i + INPUT_LEN] for i in starts]
-    ys = [feats[i + INPUT_LEN : i + _WINDOW_SPAN, :N_MOVEMENTS] for i in starts]
+    ys = [
+        np.stack([feats[i + INPUT_LEN - 1 + o, :N_MOVEMENTS] for o in target_offsets])
+        for i in starts
+    ]
     if not xs:
         return (
             np.empty((0, INPUT_LEN, N_FEATURES), dtype=np.float32),
-            np.empty((0, HORIZON, N_MOVEMENTS), dtype=np.float32),
+            np.empty((0, len(target_offsets), N_MOVEMENTS), dtype=np.float32),
         )
     return np.stack(xs).astype(np.float32), np.stack(ys).astype(np.float32)
 
@@ -109,12 +123,15 @@ class LSTMDataset(Dataset):
     leakage test to prove no window mixes scenarios.
     """
 
-    def __init__(self, files: list[Path]) -> None:
+    def __init__(
+        self, files: list[Path], target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS
+    ) -> None:
+        self.target_offsets = target_offsets
         xs: list[np.ndarray] = []
         ys: list[np.ndarray] = []
         self.window_sources: list[str] = []
         for path in files:
-            x, y = _window_file(_load_features(path))
+            x, y = _window_file(_load_features(path), target_offsets)
             if len(x) == 0:
                 continue
             xs.append(x)
@@ -126,7 +143,7 @@ class LSTMDataset(Dataset):
         )
         self._y = (
             torch.from_numpy(np.concatenate(ys)) if ys
-            else torch.empty((0, HORIZON, N_MOVEMENTS))
+            else torch.empty((0, len(target_offsets), N_MOVEMENTS))
         )
 
     def __len__(self) -> int:
@@ -136,13 +153,17 @@ class LSTMDataset(Dataset):
         return self._x[idx], self._y[idx]
 
 
-def load_split(split: str, data_dir: Path = _DATA_DIR) -> LSTMDataset:
+def load_split(
+    split: str, data_dir: Path = _DATA_DIR,
+    target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
+) -> LSTMDataset:
     """Build the ``LSTMDataset`` for one split from its scenario CSVs."""
-    return LSTMDataset(files_for_split(split, data_dir))
+    return LSTMDataset(files_for_split(split, data_dir), target_offsets)
 
 
 def make_dataloaders(
-    data_dir: Path = _DATA_DIR, *, batch_size: int = 64
+    data_dir: Path = _DATA_DIR, *, batch_size: int = 64,
+    target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
 ) -> dict[str, DataLoader]:
     """Train/val/test ``DataLoader``s (train shuffled; val/test in order).
 
@@ -152,7 +173,7 @@ def make_dataloaders(
     """
     return {
         split: DataLoader(
-            load_split(split, data_dir),
+            load_split(split, data_dir, target_offsets),
             batch_size=batch_size,
             shuffle=(split == "train"),
         )
@@ -160,6 +181,8 @@ def make_dataloaders(
     }
 
 
-def split_sizes(data_dir: Path = _DATA_DIR) -> dict[str, int]:
+def split_sizes(
+    data_dir: Path = _DATA_DIR, target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS
+) -> dict[str, int]:
     """``{split: n_windows}`` - for documenting the train/val/test sizes (DoD)."""
-    return {split: len(load_split(split, data_dir)) for split in SPLITS}
+    return {split: len(load_split(split, data_dir, target_offsets)) for split in SPLITS}
