@@ -152,6 +152,11 @@ class LSTMDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self._x[idx], self._y[idx]
 
+    def input_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-feature ``(mean, std)`` over all input windows (fits the model's
+        normalizer). Public so training never reaches into the windowed tensors."""
+        return self._x.mean(dim=(0, 1)), self._x.std(dim=(0, 1))
+
 
 def load_split(
     split: str, data_dir: Path = _DATA_DIR,
@@ -164,18 +169,22 @@ def load_split(
 def make_dataloaders(
     data_dir: Path = _DATA_DIR, *, batch_size: int = 64,
     target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
+    shuffle_seed: int | None = None,
 ) -> dict[str, DataLoader]:
     """Train/val/test ``DataLoader``s (train shuffled; val/test in order).
 
-    Batch size 64 per lstm-forecasting.md. Windows themselves carry no
-    cross-scenario leakage (scenario-level split + per-file windowing), so
-    shuffling the train windows is safe.
+    Batch size 64 per lstm-forecasting.md. Windows carry no cross-scenario leakage
+    (scenario-level split + per-file windowing), so shuffling train is safe. Pass
+    ``shuffle_seed`` to make the train shuffle reproducible *independently* of the
+    global RNG state (otherwise the order depends on how much RNG was consumed before).
     """
+    g = torch.Generator().manual_seed(shuffle_seed) if shuffle_seed is not None else None
     return {
         split: DataLoader(
             load_split(split, data_dir, target_offsets),
             batch_size=batch_size,
             shuffle=(split == "train"),
+            generator=g if split == "train" else None,
         )
         for split in SPLITS
     }

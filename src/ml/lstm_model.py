@@ -1,20 +1,28 @@
 """T-03-02 - The LSTM queue forecaster + its freeze-gate metrics.
 
-Architecture is the locked spec (``lstm-forecasting.md`` "Interface contract"):
-2-layer LSTM, hidden 128, dropout 0.1, a linear head ``128 -> 36`` reshaped to the
-``(3, 12)`` 3-step queue forecast. Frozen during DQN training (T-03-05).
+Architecture (lstm-forecasting.md + ADR-005): 2-layer LSTM, hidden 128, dropout 0.1,
+a linear head ``128 -> 36`` reshaped to a ``(3, 12)`` forecast of 3 future queue
+points. The head is **RESIDUAL** (ADR-005): it predicts the *change* from the current
+queue (``forecast = current_queue + delta``), which anchors the model to the present
+and fixed the held-out distribution-shift collapse of the original direct forecast.
+Inputs are z-score standardized inside ``forward`` (train-fit buffers, saved with the
+weights). Frozen during DQN training (T-03-05).
 
-The **freeze gate** (open-items E1/F, revised): the forecast is judged not by raw
-MSE but by **skill score vs a persistence baseline** (predict "the queue 1-3 steps
-ahead = the queue now"). Persistence already scores high R^2 "for free" at 10 s
-queue horizons, so R^2 is a sanity check only - skill score is the go/no-go:
+*Which* 3 future points are forecast is set by the data loader's target offsets
+(ADR-006: **60/90/120 s** ahead by default), NOT here - this module fixes only the
+COUNT (3 = ``HORIZON``) and shape. Counts feed in as inputs; only queue is forecast.
 
-    SS_h = 1 - MSE_model(h) / MSE_persistence(h)        (per horizon h)
+The **freeze gate** (open-items E1/F): judge the forecast by **skill score vs a
+persistence baseline** (predict "future queue = queue now"), not raw MSE - persistence
+scores high R^2 "for free", so R^2 is a sanity check only and skill score is the
+go/no-go:
 
-    SHIP the 36 forecast dims iff  SS@h+1 > 0.10  AND  SS@h+3 > 0.05  (on held-out val)
+    SS_h = 1 - MSE_model(h) / MSE_persistence(h)        (per forecast point h)
 
-``gate_verdict`` encodes the locked fallback tree (SS<=0 @h+1 -> retrain or drop all
-36 dims to a 20-dim DQN; pass@h+1 but fail@h+3 -> ship, DQN down-weights h+3).
+    SHIP the 36 forecast dims iff  SS@near > 0.10  AND  SS@far > 0.05  (held-out val)
+
+``gate_verdict`` encodes the locked fallback tree (SS<=0 at the near point -> retrain,
+or drop all 36 dims to a 20-dim DQN; near passes but far weak -> ship with caveat).
 """
 
 from __future__ import annotations
@@ -37,7 +45,7 @@ SS_THRESHOLD_H3 = 0.05  # skill score @ h+3
 
 
 class LSTMForecaster(nn.Module):
-    """2-layer LSTM -> linear head -> ``(B, 3, 12)`` queue forecast (lstm-forecasting.md)."""
+    """2-layer LSTM -> residual head -> ``(B, 3, 12)`` queue forecast = current queue + delta (ADR-005)."""
 
     def __init__(
         self,
@@ -111,40 +119,44 @@ def r2_score(pred: Tensor, target: Tensor) -> float:
 
 @dataclass(frozen=True)
 class GateDecision:
-    """The freeze-gate verdict + the numbers behind it."""
+    """The freeze-gate verdict + the numbers behind it.
+
+    ``ss_near`` / ``ss_far`` are the skill scores at the FIRST and LAST forecast points
+    (with the ADR-006 default offsets, 60 s and 120 s ahead).
+    """
 
     ship: bool          # ship the 36 forecast dims at all?
     verdict: str        # PASS / SHIP_WITH_CAVEAT / RETRAIN_OR_DROP
     reason: str
-    ss_h1: float
-    ss_h3: float
+    ss_near: float      # skill at the first/nearest forecast point
+    ss_far: float       # skill at the last/farthest forecast point
 
 
-def gate_verdict(ss_h1: float, ss_h3: float) -> GateDecision:
-    """Map the val skill scores to the locked fallback tree (open-items E1/F)."""
-    if ss_h1 <= 0.0:
+def gate_verdict(ss_near: float, ss_far: float) -> GateDecision:
+    """Map the val skill scores (near + far forecast points) to the locked fallback tree."""
+    if ss_near <= 0.0:
         return GateDecision(
             ship=False, verdict="RETRAIN_OR_DROP",
-            reason="SS@h+1<=0: forecast is no better than persistence -> retrain; "
+            reason="SS@near<=0: forecast is no better than persistence -> retrain; "
                    "if it still fails, drop all 36 dims and run the 20-dim DQN (report as finding).",
-            ss_h1=ss_h1, ss_h3=ss_h3,
+            ss_near=ss_near, ss_far=ss_far,
         )
-    if ss_h1 > SS_THRESHOLD_H1 and ss_h3 > SS_THRESHOLD_H3:
+    if ss_near > SS_THRESHOLD_H1 and ss_far > SS_THRESHOLD_H3:
         return GateDecision(
             ship=True, verdict="PASS",
-            reason=f"SS@h+1={ss_h1:.3f}>{SS_THRESHOLD_H1} and SS@h+3={ss_h3:.3f}>{SS_THRESHOLD_H3}: "
+            reason=f"SS@near={ss_near:.3f}>{SS_THRESHOLD_H1} and SS@far={ss_far:.3f}>{SS_THRESHOLD_H3}: "
                    "ship the 36 forecast dims.",
-            ss_h1=ss_h1, ss_h3=ss_h3,
+            ss_near=ss_near, ss_far=ss_far,
         )
-    if ss_h1 > SS_THRESHOLD_H1:  # passes h+1, weak at h+3
+    if ss_near > SS_THRESHOLD_H1:  # passes near, weak at far
         return GateDecision(
             ship=True, verdict="SHIP_WITH_CAVEAT",
-            reason=f"SS@h+1={ss_h1:.3f} passes but SS@h+3={ss_h3:.3f}<={SS_THRESHOLD_H3}: "
-                   "ship; the DQN can down-weight the noisier h+3 forecast.",
-            ss_h1=ss_h1, ss_h3=ss_h3,
+            reason=f"SS@near={ss_near:.3f} passes but SS@far={ss_far:.3f}<={SS_THRESHOLD_H3}: "
+                   "ship; the DQN can down-weight the noisier far-horizon forecast.",
+            ss_near=ss_near, ss_far=ss_far,
         )
-    return GateDecision(  # 0 < SS@h+1 <= 0.10
+    return GateDecision(  # 0 < SS@near <= 0.10
         ship=True, verdict="SHIP_WITH_CAVEAT",
-        reason=f"0<SS@h+1={ss_h1:.3f}<={SS_THRESHOLD_H1}: marginal skill -> ship with a documented caveat.",
-        ss_h1=ss_h1, ss_h3=ss_h3,
+        reason=f"0<SS@near={ss_near:.3f}<={SS_THRESHOLD_H1}: marginal skill -> ship with a documented caveat.",
+        ss_near=ss_near, ss_far=ss_far,
     )

@@ -46,10 +46,22 @@ def test_skill_score_endpoints() -> None:
 
 def test_gate_fallback_tree() -> None:
     assert gate_verdict(0.20, 0.10).verdict == "PASS"
-    assert gate_verdict(0.20, 0.01).verdict == "SHIP_WITH_CAVEAT"   # weak h+3
-    assert gate_verdict(0.05, 0.02).verdict == "SHIP_WITH_CAVEAT"   # marginal h+1
+    assert gate_verdict(0.20, 0.01).verdict == "SHIP_WITH_CAVEAT"   # weak far point
+    assert gate_verdict(0.05, 0.02).verdict == "SHIP_WITH_CAVEAT"   # marginal near point
     bad = gate_verdict(-0.1, 0.2)
     assert bad.verdict == "RETRAIN_OR_DROP" and bad.ship is False
+    # boundaries: ss_near == 0 -> drop (strict >0); ss_near == 0.10 is NOT a strict PASS
+    assert gate_verdict(0.0, 0.5).verdict == "RETRAIN_OR_DROP"
+    assert gate_verdict(0.10, 0.20).verdict == "SHIP_WITH_CAVEAT"
+
+
+def test_horizon_constants_consistent() -> None:
+    """N1: the model head size and the loader's forecast-point count must not drift."""
+    from src.ml import lstm_data
+
+    assert lstm_data.HORIZON == HORIZON
+    assert lstm_data.N_MOVEMENTS == N_MOVEMENTS
+    assert len(lstm_data.DEFAULT_TARGET_OFFSETS) == HORIZON
 
 
 def _toy_loaders():
@@ -62,6 +74,9 @@ def _toy_loaders():
 
 
 def test_training_reduces_loss_and_saves_state() -> None:
+    # Plumbing smoke only: checks gradient flow, early-stopping, and best-state save.
+    # The residual head wins this toy task by driving delta->0, so it does NOT prove
+    # the LSTM learns history-dependent structure (that lives in the real-data run).
     train_loader, val_loader = _toy_loaders()
     model = LSTMForecaster()
     before = evaluate(model, val_loader, "cpu")

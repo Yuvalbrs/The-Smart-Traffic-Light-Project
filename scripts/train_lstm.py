@@ -33,6 +33,7 @@ from src.ml.lstm_model import (
     HIDDEN_SIZE,
     HORIZON,
     INPUT_SIZE,
+    N_MOVEMENTS,
     NUM_LAYERS,
     GateDecision,
     LSTMForecaster,
@@ -147,16 +148,22 @@ def main() -> None:
     args = parser.parse_args()
 
     offsets = tuple(int(o) for o in args.target_offsets.split(","))
-    torch.manual_seed(args.seed)  # deterministic init + shuffling
-    loaders = make_dataloaders(_DATA_DIR, batch_size=args.batch, target_offsets=offsets)
+    if len(offsets) != HORIZON:  # the head is fixed at HORIZON x N_MOVEMENTS
+        parser.error(
+            f"--target-offsets must have exactly {HORIZON} points (head is "
+            f"{HORIZON}x{N_MOVEMENTS}); got {len(offsets)}: {offsets}"
+        )
+    torch.manual_seed(args.seed)  # deterministic weight init
+    loaders = make_dataloaders(
+        _DATA_DIR, batch_size=args.batch, target_offsets=offsets, shuffle_seed=args.seed
+    )
     sizes = {k: len(v.dataset) for k, v in loaders.items()}
     print(f"[lstm-train] windows: {sizes}")
 
     model = LSTMForecaster()
     # Fit the input normalizer on the TRAIN windows only (no val/test leakage),
     # then train; the stats ride in the checkpoint for identical inference scaling.
-    train_x = loaders["train"].dataset._x  # (N, 12, 24) raw features
-    model.set_input_stats(train_x.mean(dim=(0, 1)), train_x.std(dim=(0, 1)))
+    model.set_input_stats(*loaders["train"].dataset.input_stats())
     best_state, history = train_model(
         model, loaders["train"], loaders["val"],
         lr=args.lr, max_epochs=args.max_epochs, patience=args.patience, device=args.device,

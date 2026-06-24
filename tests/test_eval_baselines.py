@@ -67,6 +67,29 @@ def test_tripinfo_off_by_default(tmp_path) -> None:
         env.close()
 
 
+def test_reset_reuse_without_fresh_output_path_raises(tmp_path) -> None:
+    """H1: reusing one env across episodes with a FIXED output path would let SUMO's
+    traci.load truncate the prior file - the guard must catch it, and a per-episode
+    path via reset(options=...) must be allowed."""
+    scn = _scn()
+    route = write_routes(scn, 0)
+    env = SUMOEnv(route, episode_length_s=60, sumo_seed=0, tripinfo_path=tmp_path / "a.xml")
+    try:
+        env.reset()
+        with pytest.raises(RuntimeError, match="tripinfo_path"):
+            env.reset()  # reuse with the same fixed path -> would overwrite -> guard
+        env.reset(options={"tripinfo_path": str(tmp_path / "b.xml")})  # fresh path is OK
+    finally:
+        env.close()
+
+
+def test_warmup_past_episode_length_raises(tmp_path) -> None:
+    """M2: an empty KPI window must fail loudly, not return silent NaNs."""
+    scn = _scn()
+    with pytest.raises(ValueError, match="empty"):
+        run_episode(scn, 0, "webster", work_dir=tmp_path, episode_length_s=120, warmup_s=300.0)
+
+
 def test_run_episode_returns_seven_kpis(tmp_path) -> None:
     scn = _scn()
     kpis = run_episode(

@@ -50,15 +50,15 @@ _OUT_DIR = _REPO_ROOT / "data" / "eval"
 # on the same SUMO vehicle seed -> paired samples (evaluation-methodology.md).
 CONTROLLERS = ("webster", "max_pressure", "actuated")
 
-# The scalars shown in the printed table (5b -> worst_movement_max_wait scalar).
+# (EpisodeKPIs field, column header) for the printed table (5b -> worst-movement max).
 _TABLE_KPIS = (
-    ("avg_waiting_time", "avg_wait", "s", "down"),
-    ("avg_queue_length", "avg_queue", "veh", "down"),
-    ("throughput", "throughput", "veh/h", "up"),
-    ("num_stops", "stops", "/veh", "down"),
-    ("wait_p95", "p95_wait", "s", "down"),
-    ("fairness_std", "fairness", "s", "down"),
-    ("worst_movement_max_wait", "worst_max", "s", "down"),
+    ("avg_waiting_time", "avg_wait"),
+    ("avg_queue_length", "avg_queue"),
+    ("throughput", "throughput"),
+    ("num_stops", "stops"),
+    ("wait_p95", "p95_wait"),
+    ("fairness_std", "fairness"),
+    ("worst_movement_max_wait", "worst_max"),
 )
 
 
@@ -83,6 +83,11 @@ def run_episode(
     warmup_s: float,
 ) -> EpisodeKPIs:
     """Run one (scenario, seed, controller) episode and return its 7 KPIs."""
+    if warmup_s >= episode_length_s:  # empty KPI window -> silent all-NaN metrics
+        raise ValueError(
+            f"warmup_s ({warmup_s}) must be < episode_length_s ({episode_length_s}); "
+            "the KPI window [warmup, length] would be empty."
+        )
     route = write_routes(scenario, seed)
     stem = f"{scenario.id}_seed{seed:02d}_{controller}"
     jsonl = work_dir / f"{stem}.jsonl"
@@ -133,12 +138,12 @@ def _fmt(values: list[float]) -> str:
 def _print_scenario_table(scenario_id: str, by_ctrl: dict[str, list[EpisodeKPIs]]) -> None:
     """Print one comparison table: rows = controllers, cols = the 7 KPIs."""
     print(f"\n=== {scenario_id} ===")
-    head = f"{'controller':<14}" + "".join(f"{short:>14}" for _, short, _, _ in _TABLE_KPIS)
+    head = f"{'controller':<14}" + "".join(f"{short:>14}" for _, short in _TABLE_KPIS)
     print(head)
     print("-" * len(head))
     for ctrl in CONTROLLERS:
         eps = by_ctrl.get(ctrl, [])
-        cells = [_fmt([getattr(k, field) for k in eps]) for field, _, _, _ in _TABLE_KPIS]
+        cells = [_fmt([getattr(k, field) for k in eps]) for field, _ in _TABLE_KPIS]
         flags = ""
         if any(k.gridlock_censored for k in eps):
             flags = "  [gridlock-censored]"

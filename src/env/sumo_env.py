@@ -88,8 +88,9 @@ class SUMOEnv(gym.Env):
         to this path - the second artifact the KPI extractor needs (per-vehicle
         ``waitingTime`` / ``waitingCount`` for wait, stops, p95). SUMO finalizes the
         file when the simulation ends, so read it only after ``close()``. Off by
-        default. One episode per env instance is assumed (the eval-runner pattern);
-        a ``reset``-based reload would overwrite the same path.
+        default. For multi-episode reuse of one env, pass a fresh path each episode
+        via ``reset(options={"tripinfo_path": ...})`` (a plain reload reuses the same
+        path and would overwrite it; ``reset`` raises if you forget).
     """
 
     metadata = {"render_modes": []}
@@ -181,8 +182,31 @@ class SUMOEnv(gym.Env):
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
-        """Start or reload the simulation and return ``(obs, info)``."""
+        """Start or reload the simulation and return ``(obs, info)``.
+
+        ``options`` may carry per-episode output paths ``{"trace_path": ...,
+        "tripinfo_path": ...}``. Supplying them is REQUIRED when reusing one env
+        across episodes with a file output configured: ``reset()`` reloads via
+        ``traci.load``, which finalizes+truncates any fixed output file, so without a
+        fresh path per episode only the last episode's trace/trip-info would survive.
+        """
         super().reset(seed=seed)
+        opts = options or {}
+        if "trace_path" in opts:
+            self._trace_path = Path(opts["trace_path"]) if opts["trace_path"] else None
+        if "tripinfo_path" in opts:
+            self._tripinfo_path = Path(opts["tripinfo_path"]) if opts["tripinfo_path"] else None
+        if self._started:  # reuse via traci.load would overwrite a fixed output file
+            if self._trace_path is not None and "trace_path" not in opts:
+                raise RuntimeError(
+                    "reset() reuse would overwrite the fixed trace_path; pass a fresh "
+                    "reset(options={'trace_path': ...}) per episode, or use a new env."
+                )
+            if self._tripinfo_path is not None and "tripinfo_path" not in opts:
+                raise RuntimeError(
+                    "reset() reuse would overwrite the fixed tripinfo_path; pass a fresh "
+                    "reset(options={'tripinfo_path': ...}) per episode, or use a new env."
+                )
         args = self._sumo_args()
         if not self._started:
             binary = checkBinary("sumo-gui" if self._use_gui else "sumo")
