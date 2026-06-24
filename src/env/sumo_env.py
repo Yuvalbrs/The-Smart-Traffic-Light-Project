@@ -83,6 +83,13 @@ class SUMOEnv(gym.Env):
         (the T-01-04 tracer). The file is rewritten fresh each ``reset``. Off by
         default (no tracing overhead). Consumed by the KPI extractor, replay, the
         dashboard, and the repro smoke test (T-01-07).
+    tripinfo_path : str or Path, optional
+        When set, tell SUMO to write per-vehicle trip-info XML (``--tripinfo-output``)
+        to this path - the second artifact the KPI extractor needs (per-vehicle
+        ``waitingTime`` / ``waitingCount`` for wait, stops, p95). SUMO finalizes the
+        file when the simulation ends, so read it only after ``close()``. Off by
+        default. One episode per env instance is assumed (the eval-runner pattern);
+        a ``reset``-based reload would overwrite the same path.
     """
 
     metadata = {"render_modes": []}
@@ -102,6 +109,7 @@ class SUMOEnv(gym.Env):
         signal_mode: str = "rl",
         additional_file: str | Path | None = None,
         trace_path: str | Path | None = None,
+        tripinfo_path: str | Path | None = None,
     ) -> None:
         super().__init__()
         if signal_mode not in ("rl", "actuated"):
@@ -124,6 +132,9 @@ class SUMOEnv(gym.Env):
         # optional per-second JSONL tracing (T-01-04 tracer wired in): the eval
         # runner, replay mode, dashboard, and the repro smoke test all consume this.
         self._trace_path = Path(trace_path) if trace_path is not None else None
+        # SUMO-native per-vehicle trip-info (the KPI extractor's second input);
+        # written by SUMO at simulation end, read after close().
+        self._tripinfo_path = Path(tripinfo_path) if tripinfo_path is not None else None
         self._tracer: JsonlWriter | None = None
         self._resolver: MovementResolver | None = None
         self._seq = 0
@@ -161,6 +172,8 @@ class SUMOEnv(gym.Env):
         ]
         if self._additional_file is not None:  # actuated program + detectors
             args += ["-a", str(self._additional_file)]
+        if self._tripinfo_path is not None:  # per-vehicle KPIs (wait/stops/p95)
+            args += ["--tripinfo-output", str(self._tripinfo_path)]
         return args
 
     # --- Gym API ---
