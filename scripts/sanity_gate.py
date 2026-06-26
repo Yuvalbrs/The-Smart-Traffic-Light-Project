@@ -34,12 +34,10 @@ from pathlib import Path
 import numpy as np
 
 from scripts.build_network import build_net
-from scripts.build_routes import write_routes
-from src.env.sumo_env import SUMOEnv
-from src.ml.hybrid_wrapper import HybridStateWrapper, load_forecaster
+from scripts.env_factory import build_env
+from src.ml.hybrid_wrapper import load_forecaster
 from src.ml.train_loop import TrainConfig, train
 from src.provenance.versions import git_sha
-from src.scenarios.config import SCENARIO_DIR, load_scenario
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
@@ -142,21 +140,6 @@ def _write_verdict(run_dir: Path, go: bool, reasons: list[str], metrics: dict[st
     return path
 
 
-def _make_env_factory(scenario_id: str, episode_length_s: int | None, forecaster):
-    scenario = load_scenario(SCENARIO_DIR / f"scn_{scenario_id.split('-')[1]}.yaml")
-
-    def make_env(route_seed: int):
-        env = SUMOEnv(
-            write_routes(scenario, route_seed),
-            episode_length_s=episode_length_s or scenario.duration_s,
-            decision_interval_s=10, switch_penalty=0.1,
-            sumo_seed=route_seed, signal_mode="rl",
-        )
-        return HybridStateWrapper(env, forecaster) if forecaster is not None else env
-
-    return make_env
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -165,6 +148,8 @@ def main() -> None:
     parser.add_argument("--scenario", default="SCN-01", help="single scenario id (default SCN-01)")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--episode-length", type=int, default=None, help="override (for self-test)")
+    parser.add_argument("--switch-penalty", type=float, default=0.1,
+                        help="reward switch penalty lambda (default 0.1)")
     parser.add_argument("--forecast-ckpt", default=None, help="optional: gate the hybrid variant")
     parser.add_argument("--run-dir", default=None)
     args = parser.parse_args()
@@ -181,6 +166,7 @@ def main() -> None:
         train_scenarios=(args.scenario,),  # single scenario - no rotation (the gate's point)
         validation_every=0,                # gate judges training dynamics, not held-out reward
         checkpoint_every=50,
+        switch_penalty=args.switch_penalty,
         forecast_ckpt=args.forecast_ckpt,
         log_steps=True,                    # Q stats per learn step feed the bounded-Q check
         git_sha=git_sha(short=True) or "",
@@ -188,11 +174,21 @@ def main() -> None:
 
     build_net()
     forecaster = load_forecaster(args.forecast_ckpt) if args.forecast_ckpt else None
-    make_env = _make_env_factory(args.scenario, args.episode_length, forecaster)
+
+    def make_env(scenario_id: str, route_seed: int):
+        return build_env(
+            scenario_id, route_seed, forecaster=forecaster,
+            episode_length_s=args.episode_length, switch_penalty=cfg.switch_penalty,
+        )
 
     print(f"[sanity] {args.scenario} seed={args.seed} episodes={cfg.n_episodes} "
           f"variant={variant} -> {run_dir}")
-    train(cfg, make_train_env=lambda _sid, rs: make_env(rs), make_val_env=make_env, run_dir=run_dir)
+    train(
+        cfg,
+        make_train_env=make_env,
+        make_val_env=lambda rs: make_env(args.scenario, rs),
+        run_dir=run_dir,
+    )
 
     go, reasons, metrics = _analyze(run_dir)
     verdict_path = _write_verdict(run_dir, go, reasons, metrics, cfg)

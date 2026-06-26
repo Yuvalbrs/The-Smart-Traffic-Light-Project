@@ -3,7 +3,8 @@
 Wires the real simulation stack into the env factories the training loop
 (:mod:`src.ml.train_loop`) consumes, then runs it. The loop itself is stack-agnostic
 (it never imports ``scripts``); this script is the only place that knows about
-``write_routes`` / ``SUMOEnv`` / the hybrid wrapper, so the loop stays unit-testable.
+``SUMOEnv`` / the hybrid wrapper (via :mod:`scripts.env_factory`), so the loop stays
+unit-testable.
 
 Scenario rotation is by route file (no ``set_scenario`` on the real env): each episode the
 loop asks for ``make_train_env(scenario_id, route_seed)`` and we generate that scenario's
@@ -20,6 +21,9 @@ Run::
     # 56-dim hybrid run with the frozen forecaster
     python -m scripts.train_dqn --seed 42 --variant hybrid --forecast-ckpt checkpoints/lstm-XXXX.pt
 
+    # switch-penalty ablation (T-04-03), lambda = 0.5
+    python -m scripts.train_dqn --seed 42 --switch-penalty 0.5 --variant lambda050
+
     # quick smoke (T-03-06 build verification: a few short episodes)
     python -m scripts.train_dqn --episodes 3 --episode-length 200 --validation-every 0 --no-log-steps
 
@@ -34,39 +38,13 @@ import sys
 from pathlib import Path
 
 from scripts.build_network import build_net
-from scripts.build_routes import write_routes
-from src.env.sumo_env import SUMOEnv
-from src.ml.hybrid_wrapper import HybridStateWrapper, load_forecaster
+from scripts.env_factory import build_env
+from src.ml.hybrid_wrapper import load_forecaster
 from src.ml.train_loop import TrainConfig, train
 from src.provenance.versions import git_sha
-from src.scenarios.config import SCENARIO_DIR, load_scenario
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
-
-
-def _scenario(scenario_id: str):
-    """Load a scenario by id (e.g. ``"SCN-01"`` -> ``config/scenarios/scn_01.yaml``)."""
-    return load_scenario(SCENARIO_DIR / f"scn_{scenario_id.split('-')[1]}.yaml")
-
-
-def _make_env(
-    scenario_id: str, route_seed: int, *, episode_length_s: int | None, forecaster
-):
-    """Build one ``SUMOEnv`` (optionally hybrid-wrapped) on a fresh deterministic route file."""
-    scenario = _scenario(scenario_id)
-    route = write_routes(scenario, route_seed)
-    env = SUMOEnv(
-        route,
-        episode_length_s=episode_length_s or scenario.duration_s,
-        decision_interval_s=10,
-        switch_penalty=0.1,
-        sumo_seed=route_seed,
-        signal_mode="rl",
-    )
-    if forecaster is not None:
-        env = HybridStateWrapper(env, forecaster)
-    return env
 
 
 def main() -> None:
@@ -79,6 +57,8 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=300, help="number of episodes (default 300)")
     parser.add_argument("--episode-length", type=int, default=None,
                         help="override episode length in sim-seconds (for smoke runs)")
+    parser.add_argument("--switch-penalty", type=float, default=0.1,
+                        help="reward switch penalty lambda (T-04-03 sweep; default 0.1)")
     parser.add_argument("--forecast-ckpt", default=None,
                         help="path to the frozen LSTM checkpoint -> 56-dim hybrid run")
     parser.add_argument("--validation-every", type=int, default=25,
@@ -95,13 +75,15 @@ def main() -> None:
     args = parser.parse_args()
 
     variant = args.variant or ("hybrid" if args.forecast_ckpt else "plain")
-    run_dir = Path(args.run_dir) if args.run_dir else _RUNS_DIR / f"{variant}_seed{args.seed}"
+    run_dir = (Path(args.run_dir) if args.run_dir
+               else _RUNS_DIR / f"{variant}_seed{args.seed}").resolve()
 
     cfg = TrainConfig(
         variant=variant,
         seed=args.seed,
         n_episodes=args.episodes,
         episode_length_s=args.episode_length or 3600,
+        switch_penalty=args.switch_penalty,
         validation_every=args.validation_every,
         validation_episodes=args.validation_episodes,
         checkpoint_every=args.checkpoint_every,
@@ -114,19 +96,20 @@ def main() -> None:
     forecaster = load_forecaster(args.forecast_ckpt) if args.forecast_ckpt else None
 
     def make_train_env(scenario_id: str, route_seed: int):
-        return _make_env(
-            scenario_id, route_seed,
-            episode_length_s=args.episode_length, forecaster=forecaster,
+        return build_env(
+            scenario_id, route_seed, forecaster=forecaster,
+            episode_length_s=args.episode_length, switch_penalty=cfg.switch_penalty,
         )
 
     def make_val_env(route_seed: int):
-        return _make_env(
-            cfg.val_scenario, route_seed,
-            episode_length_s=args.episode_length, forecaster=forecaster,
+        return build_env(
+            cfg.val_scenario, route_seed, forecaster=forecaster,
+            episode_length_s=args.episode_length, switch_penalty=cfg.switch_penalty,
         )
 
     print(f"[train] variant={variant} seed={args.seed} obs_dim={cfg.obs_dim} "
-          f"episodes={cfg.n_episodes} eps_decay_steps={cfg.eps_decay_steps} -> {run_dir}")
+          f"episodes={cfg.n_episodes} lambda={cfg.switch_penalty} "
+          f"eps_decay_steps={cfg.eps_decay_steps} -> {run_dir}")
     result = train(
         cfg,
         make_train_env=make_train_env,

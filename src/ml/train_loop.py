@@ -387,7 +387,11 @@ def train(
 
                     ss: float | None = None
                     if skill is not None:
-                        queue, _count = env.movement_features()
+                        # reuse the queue the hybrid wrapper already read this step (no 2nd TraCI
+                        # call); fall back to movement_features() only if the attr is absent.
+                        queue = getattr(env, "last_queue", None)
+                        if queue is None:
+                            queue, _count = env.movement_features()
                         ss = skill.update(queue, getattr(env, "last_forecast", None))
 
                     if total_steps % cfg.target_update_freq == 0:

@@ -88,10 +88,13 @@ class HybridStateWrapper(gym.Wrapper):
         self.forecaster = forecaster.eval()
         self._history_len = history_len
         self._history: collections.deque[np.ndarray] = collections.deque(maxlen=history_len)
-        # Last RAW (3, 12) queue forecast (pre-normalization), or ``None`` during cold start.
-        # Exposed only for the T-03-06 training-loop forecast-skill (SS_rolling) diagnostic;
-        # the observation still carries the z-scored forecast, this never feeds the agent.
+        # Last RAW (3, 12) queue forecast (pre-normalization), or ``None`` during cold start,
+        # plus the realized per-movement queue at the same step. Exposed only for the T-03-06
+        # training-loop forecast-skill (SS_rolling) diagnostic - it reuses the queue this wrapper
+        # already reads each step, so the loop need not call ``movement_features()`` a second time.
+        # Neither ever feeds the agent (the observation carries the z-scored forecast).
         self.last_forecast: np.ndarray | None = None
+        self.last_queue: np.ndarray | None = None
 
         base = env.observation_space
         fc_low = np.full(FORECAST_DIM, -np.inf, np.float32)
@@ -111,6 +114,7 @@ class HybridStateWrapper(gym.Wrapper):
         """Reset the base env, clear history, and return the augmented ``(obs, info)``."""
         self._history.clear()
         self.last_forecast = None
+        self.last_queue = None
         obs, info = self.env.reset(seed=seed, options=options)
         return self._augment(obs), info
 
@@ -130,6 +134,7 @@ class HybridStateWrapper(gym.Wrapper):
     def _augment(self, base_obs: np.ndarray) -> np.ndarray:
         """Append current features to history, run the forecaster, concat the 36 forecast dims."""
         queue, count = self.env.movement_features()  # (12,), (12,)
+        self.last_queue = np.asarray(queue, dtype=np.float32)  # reused by the SS_rolling diagnostic
         self._history.append(np.concatenate([queue, count]).astype(np.float32))  # (24,) [q..,c..]
         if len(self._history) < self._history_len:  # cold start -> honest zero forecast
             forecast = np.zeros(FORECAST_DIM, dtype=np.float32)
