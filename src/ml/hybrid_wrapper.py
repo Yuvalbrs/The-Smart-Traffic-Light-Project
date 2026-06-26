@@ -63,6 +63,24 @@ def load_forecaster(
     return model
 
 
+def random_forecaster(*, seed: int | None = None) -> LSTMForecaster:
+    """A frozen, UNTRAINED forecaster for the random-LSTM control ablation (T-03-07/T-04-03).
+
+    Same architecture as the real forecaster, but random initial weights and default (0/1)
+    input stats - so the wrapper's z-score is a no-op and the 36 forecast dims carry a fixed,
+    meaningless signal. This isolates "does a *real* forecast help the DQN?" from "does *any*
+    extra input help?" - an academically non-negotiable control. ``seed`` makes each run's
+    control reproducible; the model is frozen (``eval`` + no grad) exactly like the trained one.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+    model = LSTMForecaster()
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+    return model
+
+
 class HybridStateWrapper(gym.Wrapper):
     """Augment a ``SUMOEnv`` observation with the flattened, z-scored LSTM queue forecast.
 

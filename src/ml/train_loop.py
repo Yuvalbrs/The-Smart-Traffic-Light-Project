@@ -108,8 +108,11 @@ class TrainConfig:
     validation_episodes: int = 5
     checkpoint_every: int = 50
 
-    # forecast (hybrid) - path to the frozen LSTM checkpoint, or None for plain DQN
+    # forecast - path/label of the frozen LSTM, or None for plain DQN
     forecast_ckpt: str | None = None
+    # True for any 56-dim forecast run (hybrid OR the random-LSTM control); auto-set from
+    # forecast_ckpt for back-compat. Drives obs_dim (56 vs 20) and the SS_rolling tracker.
+    forecast: bool = False
 
     # logging
     log_steps: bool = True  # write per-step diagnostics to steps.csv
@@ -121,7 +124,8 @@ class TrainConfig:
     obs_dim: int = field(init=False)
 
     def __post_init__(self) -> None:
-        self.obs_dim = 56 if self.forecast_ckpt else OBS_DIM
+        self.forecast = bool(self.forecast or self.forecast_ckpt)
+        self.obs_dim = 56 if self.forecast else OBS_DIM
         if self.eps_decay_steps is None:
             steps_per_ep = max(1, self.episode_length_s // self.decision_interval_s)
             self.eps_decay_steps = int(0.5 * self.n_episodes * steps_per_ep)
@@ -351,7 +355,7 @@ def train(
         run_dir / "validation.csv", append,
         ["episode", "total_steps", "val_mean_reward", "val_std_reward"],
     )
-    skill = ForecastSkillTracker() if cfg.forecast_ckpt else None
+    skill = ForecastSkillTracker() if cfg.forecast else None
 
     try:
         for ep in range(start_ep, cfg.n_episodes):

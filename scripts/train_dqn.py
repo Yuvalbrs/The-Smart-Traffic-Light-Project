@@ -39,7 +39,7 @@ from pathlib import Path
 
 from scripts.build_network import build_net
 from scripts.env_factory import build_env
-from src.ml.hybrid_wrapper import load_forecaster
+from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
 from src.provenance.versions import git_sha
 
@@ -61,6 +61,8 @@ def main() -> None:
                         help="reward switch penalty lambda (T-04-03 sweep; default 0.1)")
     parser.add_argument("--forecast-ckpt", default=None,
                         help="path to the frozen LSTM checkpoint -> 56-dim hybrid run")
+    parser.add_argument("--random-lstm", action="store_true",
+                        help="56-dim run with a frozen UNTRAINED forecaster (random-LSTM control)")
     parser.add_argument("--validation-every", type=int, default=25,
                         help="validate every N episodes (0 disables; default 25)")
     parser.add_argument("--validation-episodes", type=int, default=5,
@@ -74,7 +76,17 @@ def main() -> None:
     parser.add_argument("--resume", default=None, help="resume from this checkpoint .pt")
     args = parser.parse_args()
 
-    variant = args.variant or ("hybrid" if args.forecast_ckpt else "plain")
+    if args.random_lstm and args.forecast_ckpt:
+        parser.error("--random-lstm and --forecast-ckpt are mutually exclusive")
+    if args.random_lstm:
+        variant = args.variant or "random-lstm"
+        forecaster, fc_label = random_forecaster(seed=args.seed), "random-lstm"
+    elif args.forecast_ckpt:
+        variant = args.variant or "hybrid"
+        forecaster, fc_label = load_forecaster(args.forecast_ckpt), args.forecast_ckpt
+    else:
+        variant = args.variant or "plain"
+        forecaster, fc_label = None, None
     run_dir = (Path(args.run_dir) if args.run_dir
                else _RUNS_DIR / f"{variant}_seed{args.seed}").resolve()
 
@@ -87,13 +99,13 @@ def main() -> None:
         validation_every=args.validation_every,
         validation_episodes=args.validation_episodes,
         checkpoint_every=args.checkpoint_every,
-        forecast_ckpt=args.forecast_ckpt,
+        forecast=forecaster is not None,
+        forecast_ckpt=fc_label,
         log_steps=not args.no_log_steps,
         git_sha=git_sha(short=True) or "",
     )
 
     build_net()  # ensure the network file matches current sources (idempotent)
-    forecaster = load_forecaster(args.forecast_ckpt) if args.forecast_ckpt else None
 
     def make_train_env(scenario_id: str, route_seed: int):
         return build_env(
