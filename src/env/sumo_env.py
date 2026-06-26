@@ -46,6 +46,19 @@ _OBS_DIM = 20
 _PRESSURE_CLIP = 10.0  # clip pressures to +/-10 then /10 -> [-1, 1] (state-space.md)
 
 
+def gridlock_penalty(max_queue: float, mu: float, threshold: float) -> float:
+    """Anti-gridlock reward shaping (v2 ablation, off by default).
+
+    Penalizes the WORST movement's queue beyond a saturation ``threshold`` - the locked reward
+    ``-sum|pressure|`` is a sum and so is blind to a single-movement queue runaway, which is the
+    proximate cause of gridlock cascades. This term gives the agent a direct gradient away from
+    that state. ``mu <= 0`` -> 0.0 (no-op: the pre-registered reward is exactly unchanged).
+    """
+    if mu <= 0.0:
+        return 0.0
+    return mu * max(0.0, float(max_queue) - threshold)
+
+
 class SUMOEnv(gym.Env):
     """Gymnasium env wrapping a single SUMO intersection under TraCI control.
 
@@ -104,6 +117,8 @@ class SUMOEnv(gym.Env):
         episode_length_s: int = 3600,
         decision_interval_s: int = 10,
         switch_penalty: float = 0.1,
+        gridlock_penalty_mu: float = 0.0,
+        gridlock_queue_threshold: float = 20.0,
         sumo_seed: int = 42,
         use_gui: bool = False,
         movements_path: str | Path = _VAULT_MOVEMENTS,
@@ -121,6 +136,8 @@ class SUMOEnv(gym.Env):
         self._episode_length_s = episode_length_s
         self._decision_interval_s = decision_interval_s
         self._switch_penalty = switch_penalty
+        self._gridlock_penalty_mu = gridlock_penalty_mu
+        self._gridlock_queue_threshold = gridlock_queue_threshold
         self._sumo_seed = sumo_seed
         self._use_gui = use_gui
         self._movements_path = movements_path
@@ -283,6 +300,11 @@ class SUMOEnv(gym.Env):
         reward = float(-np.abs(pressures).sum())
         if switched:
             reward -= self._switch_penalty
+        if self._gridlock_penalty_mu > 0.0:  # v2 anti-gridlock shaping (off by default)
+            reward -= gridlock_penalty(
+                float(np.max(ix.movement_queues(traci))),
+                self._gridlock_penalty_mu, self._gridlock_queue_threshold,
+            )
 
         # Update the green timer for the NEXT mask (point: timer reflects state AFTER
         # the yellow/all-red insertion). A switch resets it to the green run that
@@ -324,6 +346,11 @@ class SUMOEnv(gym.Env):
         truncated = (not terminated) and self._sim_time >= self._episode_length_s
         pressures = ix.pressures(traci)
         reward = float(-np.abs(pressures).sum())
+        if self._gridlock_penalty_mu > 0.0:  # v2 anti-gridlock shaping (off by default)
+            reward -= gridlock_penalty(
+                float(np.max(ix.movement_queues(traci))),
+                self._gridlock_penalty_mu, self._gridlock_queue_threshold,
+            )
         live = traci.trafficlight.getRedYellowGreenState(self._tls_id)
         action = ix.action_for_state(live)  # None during yellow/all-red -> hold last
         if action is not None:

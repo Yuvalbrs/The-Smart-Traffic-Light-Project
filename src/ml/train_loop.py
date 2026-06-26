@@ -100,6 +100,8 @@ class TrainConfig:
 
     # env reward shaping (informational here; the factory applies it to SUMOEnv)
     switch_penalty: float = 0.1
+    gridlock_penalty_mu: float = 0.0       # v2 anti-gridlock shaping; 0 = locked reward unchanged
+    gridlock_queue_threshold: float = 20.0  # per-movement queue beyond which the penalty applies
 
     # scenarios / validation / checkpointing
     train_scenarios: tuple[str, ...] = ("SCN-01", "SCN-02", "SCN-03")

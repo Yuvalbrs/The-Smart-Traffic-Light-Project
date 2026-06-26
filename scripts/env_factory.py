@@ -32,6 +32,8 @@ def build_env(
     forecaster: LSTMForecaster | None = None,
     episode_length_s: int | None = None,
     switch_penalty: float = 0.1,
+    gridlock_penalty_mu: float = 0.0,
+    gridlock_queue_threshold: float = 20.0,
     decision_interval_s: int = 10,
 ):
     """Build one ``SUMOEnv`` (hybrid-wrapped iff ``forecaster`` given) on a fresh route file.
@@ -45,6 +47,8 @@ def build_env(
         episode_length_s=episode_length_s or scenario.duration_s,
         decision_interval_s=decision_interval_s,
         switch_penalty=switch_penalty,
+        gridlock_penalty_mu=gridlock_penalty_mu,
+        gridlock_queue_threshold=gridlock_queue_threshold,
         sumo_seed=route_seed,
         signal_mode="rl",
     )

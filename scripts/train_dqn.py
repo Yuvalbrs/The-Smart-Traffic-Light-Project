@@ -59,6 +59,10 @@ def main() -> None:
                         help="override episode length in sim-seconds (for smoke runs)")
     parser.add_argument("--switch-penalty", type=float, default=0.1,
                         help="reward switch penalty lambda (T-04-03 sweep; default 0.1)")
+    parser.add_argument("--gridlock-penalty", type=float, default=0.0,
+                        help="v2 anti-gridlock reward weight mu (0 = off, locked reward)")
+    parser.add_argument("--gridlock-threshold", type=float, default=20.0,
+                        help="per-movement queue threshold for the anti-gridlock penalty")
     parser.add_argument("--forecast-ckpt", default=None,
                         help="path to the frozen LSTM checkpoint -> 56-dim hybrid run")
     parser.add_argument("--random-lstm", action="store_true",
@@ -96,6 +100,8 @@ def main() -> None:
         n_episodes=args.episodes,
         episode_length_s=args.episode_length or 3600,
         switch_penalty=args.switch_penalty,
+        gridlock_penalty_mu=args.gridlock_penalty,
+        gridlock_queue_threshold=args.gridlock_threshold,
         validation_every=args.validation_every,
         validation_episodes=args.validation_episodes,
         checkpoint_every=args.checkpoint_every,
@@ -111,12 +117,16 @@ def main() -> None:
         return build_env(
             scenario_id, route_seed, forecaster=forecaster,
             episode_length_s=args.episode_length, switch_penalty=cfg.switch_penalty,
+            gridlock_penalty_mu=cfg.gridlock_penalty_mu,
+            gridlock_queue_threshold=cfg.gridlock_queue_threshold,
         )
 
     def make_val_env(route_seed: int):
         return build_env(
             cfg.val_scenario, route_seed, forecaster=forecaster,
             episode_length_s=args.episode_length, switch_penalty=cfg.switch_penalty,
+            gridlock_penalty_mu=cfg.gridlock_penalty_mu,
+            gridlock_queue_threshold=cfg.gridlock_queue_threshold,
         )
 
     print(f"[train] variant={variant} seed={args.seed} obs_dim={cfg.obs_dim} "
