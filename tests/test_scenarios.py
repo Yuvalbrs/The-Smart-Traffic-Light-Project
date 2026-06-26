@@ -17,12 +17,15 @@ from src.scenarios.config import (
     load_scenario,
 )
 
-EXPECTED_IDS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"]
+# SCN-01..05 are the original locked set; SCN-06 is the calibrated near-saturation test
+# scenario added for the forecaster-rescue work (a powered hybrid-vs-plain ablation; SCN-05
+# was 78% gridlock-censored). SCN-05 is preserved untouched.
+EXPECTED_IDS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05", "SCN-06"]
 
 
-# --- DoD: the five files exist and load cleanly ---
+# --- DoD: the scenario files exist and load cleanly ---
 
-def test_five_scenarios_load() -> None:
+def test_scenarios_load() -> None:
     scenarios = load_all()
     assert [s.id for s in scenarios] == EXPECTED_IDS
 

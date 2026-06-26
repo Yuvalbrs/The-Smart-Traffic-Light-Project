@@ -1,0 +1,26 @@
+# SCN-06 — Near-saturation shifting (forecaster-rescue #0, 2026-06-27)
+# Calibrated, POWERED replacement test scenario for the forecaster ablation. The original
+# SCN-05 (sinusoidal 200-600 vph/axis) peaks at ~2166 veh/h total vs ~1650 capacity, so 78% of
+# episodes gridlock -> n=7 -> zero statistical power. This demand (sinusoidal 150-350 vph/axis,
+# 90deg out of phase) has mean total ~1000 veh/h, surging to ~1283 (~90% of capacity at the
+# peak). Empirically verified (scripts/verify_scenario.py, 6 seeds): Webster, plain-DQN AND
+# hybrid-DQN ALL run at 0% gridlock-censoring -> restores n=15 power for hybrid-vs-plain, while
+# keeping the out-of-phase oscillation a 60-120s forecast can exploit. Held-out test scenario
+# (the DQN trains on SCN-01/02/03); SCN-05 is preserved untouched so the pre-registered
+# confirmatory result stays valid. This is an exploratory future-work scenario, not a post-hoc
+# amendment of the frozen pre-registration.
+id: SCN-06
+name: Near-saturation shifting
+description: Sinusoidal 150-350 vph/axis, 90deg out of phase. Busy-but-feasible powered test for the forecaster.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: sinusoidal, vph_min: 150, vph_max: 350, period_s: 3600, phase_offset_deg: 0}
+  ew: {profile: sinusoidal, vph_min: 150, vph_max: 350, period_s: 3600, phase_offset_deg: 90}
