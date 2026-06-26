@@ -183,20 +183,34 @@ class DQNAgent:
             q_next_max = q_next.max(dim=1).values  # (B,)
             return batch.reward + self.gamma * (1.0 - batch.done) * q_next_max
 
-    def learn(self, batch: Batch) -> float:
+    def learn(self, batch: Batch, *, return_diagnostics: bool = False) -> float | dict[str, float]:
         """One gradient step on the MSE TD loss. Returns the scalar loss value.
 
         ``Q(s,a)`` from the online net, target from the frozen target net, MSE, backward,
         global-norm grad clip, ``optimizer.step()``. Does NOT sync the target (the loop owns that).
+
+        With ``return_diagnostics=True`` returns a dict ``{"loss", "grad_norm", "q_mean",
+        "q_max"}`` for the training-loop CSV (T-03-06). ``grad_norm`` is the global gradient
+        norm BEFORE clipping - the value ``clip_grad_norm_`` returns, which is the one worth
+        logging (the post-clip norm is uninformative, always <= ``grad_clip``); ``q_mean`` /
+        ``q_max`` are over the online net's Q for the actions actually taken in the batch.
         """
         target = self._td_target(batch)
         q = self.online(batch.obs).gather(1, batch.action.unsqueeze(1)).squeeze(1)
         loss = F.mse_loss(q, target)
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.online.parameters(), self.grad_clip)
+        grad_norm = nn.utils.clip_grad_norm_(self.online.parameters(), self.grad_clip)
         self.optimizer.step()
-        return float(loss.item())
+        loss_val = float(loss.item())
+        if not return_diagnostics:
+            return loss_val
+        return {
+            "loss": loss_val,
+            "grad_norm": float(grad_norm),
+            "q_mean": float(q.mean().item()),
+            "q_max": float(q.max().item()),
+        }
 
     def sync_target(self) -> None:
         """Hard update: copy online weights into the target net (call every TARGET_UPDATE_FREQ)."""

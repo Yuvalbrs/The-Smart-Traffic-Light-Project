@@ -88,6 +88,10 @@ class HybridStateWrapper(gym.Wrapper):
         self.forecaster = forecaster.eval()
         self._history_len = history_len
         self._history: collections.deque[np.ndarray] = collections.deque(maxlen=history_len)
+        # Last RAW (3, 12) queue forecast (pre-normalization), or ``None`` during cold start.
+        # Exposed only for the T-03-06 training-loop forecast-skill (SS_rolling) diagnostic;
+        # the observation still carries the z-scored forecast, this never feeds the agent.
+        self.last_forecast: np.ndarray | None = None
 
         base = env.observation_space
         fc_low = np.full(FORECAST_DIM, -np.inf, np.float32)
@@ -106,6 +110,7 @@ class HybridStateWrapper(gym.Wrapper):
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         """Reset the base env, clear history, and return the augmented ``(obs, info)``."""
         self._history.clear()
+        self.last_forecast = None
         obs, info = self.env.reset(seed=seed, options=options)
         return self._augment(obs), info
 
@@ -128,10 +133,12 @@ class HybridStateWrapper(gym.Wrapper):
         self._history.append(np.concatenate([queue, count]).astype(np.float32))  # (24,) [q..,c..]
         if len(self._history) < self._history_len:  # cold start -> honest zero forecast
             forecast = np.zeros(FORECAST_DIM, dtype=np.float32)
+            self.last_forecast = None
         else:
             x = torch.from_numpy(np.stack(self._history)).unsqueeze(0)  # (1, 12, 24)
             with torch.no_grad():
                 pred = self.forecaster(x).squeeze(0).cpu().numpy()  # (3, 12) raw queue forecast
+            self.last_forecast = pred.astype(np.float32)  # raw, for the SS_rolling diagnostic
             norm = (pred - self._queue_mean) / self._queue_std  # per-movement z-score, no clip
             forecast = norm.astype(np.float32).flatten()  # (36,)
         return np.concatenate([base_obs.astype(np.float32), forecast])
