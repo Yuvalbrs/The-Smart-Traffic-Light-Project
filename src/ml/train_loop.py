@@ -341,7 +341,7 @@ def train(
         run_dir / "episodes.csv", append,
         ["episode", "total_steps", "epsilon", "scenario", "ep_reward", "ep_steps",
          "terminated", "truncated", "mean_loss", "mean_grad_norm", "mean_q_mean",
-         "mean_q_max", "ss_rolling"],
+         "mean_q_max", "ss_rolling", "mask_legal_mean"],
     )
     step_w, step_f = _open_csv(
         run_dir / "steps.csv", append,
@@ -369,10 +369,12 @@ def train(
             grad_norms: list[float] = []
             q_means: list[float] = []
             q_maxes: list[float] = []
+            mask_legal_total = 0  # sum of legal-action counts -> mask fire-rate (T-03-08 gate)
             eps = epsilon_at(total_steps, cfg.eps_start, cfg.eps_end, cfg.eps_decay_steps)
             try:
                 while not done:
                     assert mask.any(), "all actions masked at s - env masking is broken"  # DoD guard
+                    mask_legal_total += int(np.asarray(mask).sum())
                     eps = epsilon_at(total_steps, cfg.eps_start, cfg.eps_end, cfg.eps_decay_steps)
                     action = agent.act(obs, mask, eps)
                     next_obs, reward, terminated, truncated, info = env.step(action)
@@ -412,6 +414,7 @@ def train(
                 ep, total_steps, round(eps, 5), scenario_id, ep_reward, ep_steps,
                 int(terminated), int(truncated), _mean(losses), _mean(grad_norms),
                 _mean(q_means), _mean(q_maxes), _ss_cell(skill.value() if skill else None),
+                (mask_legal_total / ep_steps) if ep_steps else "",
             ])
             ep_f.flush()
 
