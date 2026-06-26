@@ -425,6 +425,9 @@ def train(
                 (mask_legal_total / ep_steps) if ep_steps else "",
             ])
             ep_f.flush()
+            # live one-line-per-episode progress so a foreground run is watchable in the console.
+            print(f"  ep {ep + 1:3d}/{cfg.n_episodes}  {scenario_id}  "
+                  f"reward={ep_reward:12,.1f}  eps={eps:.3f}  buffer={len(buffer)}", flush=True)
 
             if ep % cfg.checkpoint_every == 0 or ep == cfg.n_episodes - 1:
                 save_checkpoint(
