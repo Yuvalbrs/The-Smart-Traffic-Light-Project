@@ -133,6 +133,48 @@ def test_full_round_trip_with_relationships(engine):
         assert ep.kpi.per_movement_max_wait == [1.0] * 12
 
 
+def test_episode_kpi_has_e5_columns(engine):
+    """The E5 per-movement-p95 + worst-movement-max columns exist (T-04 eval persistence)."""
+    cols = {c["name"] for c in inspect(engine).get_columns("episode_kpi")}
+    assert {"per_movement_p95_wait", "worst_movement_max_wait"} <= cols
+
+
+def test_episode_kpi_stores_e5_fields(engine):
+    with Session(engine) as s:
+        run = _make_run()
+        ep = Episode(run=run, index_in_run=0, seed=1, scenario="SCN-01")
+        s.add_all([run, ep])
+        s.flush()
+        s.add(EpisodeKpi(
+            episode_id_fk=ep.id, per_movement_p95_wait=[2.0] * 12, worst_movement_max_wait=9.9
+        ))
+        s.commit()
+        k = s.query(EpisodeKpi).one()
+        assert k.per_movement_p95_wait == [2.0] * 12
+        assert k.worst_movement_max_wait == 9.9
+
+
+def test_init_db_migrates_missing_columns_on_existing_table(tmp_path):
+    """An episode_kpi table created BEFORE the E5 columns gets them added, data preserved."""
+    eng = create_db_engine(tmp_path / "old.db")
+    with eng.begin() as conn:  # simulate the pre-E5 schema (7 base KPI columns)
+        conn.execute(text(
+            "CREATE TABLE episode_kpi ("
+            "id INTEGER PRIMARY KEY, schema_version VARCHAR, episode_id_fk INTEGER, "
+            "avg_waiting_time FLOAT, avg_queue_length FLOAT, throughput FLOAT, "
+            "num_stops FLOAT, wait_p95 FLOAT, fairness_std FLOAT, per_movement_max_wait JSON)"
+        ))
+        conn.execute(text("INSERT INTO episode_kpi (id, avg_waiting_time) VALUES (1, 4.2)"))
+
+    added = init_db(eng)  # create the rest + ALTER the existing episode_kpi
+
+    cols = {c["name"] for c in inspect(eng).get_columns("episode_kpi")}
+    assert {"per_movement_p95_wait", "worst_movement_max_wait"} <= cols
+    assert any(a.endswith("per_movement_p95_wait") for a in added)
+    with eng.connect() as conn:  # the pre-existing row survived the migration
+        assert conn.execute(text("SELECT avg_waiting_time FROM episode_kpi WHERE id=1")).scalar() == 4.2
+
+
 def test_episode_kpi_is_one_to_one(engine):
     """The unique constraint on episode_kpi.episode_id_fk enforces 1:1."""
     with Session(engine) as s:

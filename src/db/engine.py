@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect, text
 
 from src.db.models import Base
 
@@ -53,12 +53,42 @@ def create_db_engine(db_path: str | Path, *, echo: bool = False) -> Engine:
     return engine
 
 
-def init_db(engine: Engine) -> None:
-    """Create every table defined on :class:`src.db.models.Base` if absent.
+def _add_missing_columns(engine: Engine) -> list[str]:
+    """Idempotently ALTER existing tables to add any model column they lack.
 
-    This is the migration entry point. ``create_all`` is idempotent - it only
-    issues ``CREATE TABLE`` for tables that do not yet exist, so re-running it on
-    an existing database is a no-op.
+    ``create_all`` makes missing *tables* but never alters an existing one, so a
+    schema that GREW (e.g. the E5 ``per_movement_p95_wait`` / ``worst_movement_max_wait``
+    KPI columns added for T-04) would be silently missing on a database created by an
+    earlier version. SQLite supports ``ALTER TABLE ... ADD COLUMN``; every column added
+    this way must be nullable (so existing rows back-fill with NULL) - which holds for all
+    the grown columns. Returns the ``table.column`` names added, for logging.
+    """
+    insp = inspect(engine)
+    live_tables = set(insp.get_table_names())
+    added: list[str] = []
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in live_tables:
+                continue  # create_all already made it with every column
+            live_cols = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in live_cols:
+                    continue
+                ddl_type = col.type.compile(engine.dialect)
+                conn.execute(
+                    text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl_type}')
+                )
+                added.append(f"{table.name}.{col.name}")
+    return added
+
+
+def init_db(engine: Engine) -> list[str]:
+    """Create missing tables AND add missing columns to existing ones (idempotent migration).
+
+    Two passes: ``create_all`` issues ``CREATE TABLE`` only for absent tables, then
+    :func:`_add_missing_columns` ALTERs any pre-existing table to add columns the model
+    grew since it was created. Re-running on an up-to-date database is a no-op. Returns the
+    list of ``table.column`` names added (empty when nothing changed).
 
     Parameters
     ----------
@@ -66,3 +96,4 @@ def init_db(engine: Engine) -> None:
         The target engine (typically from :func:`create_db_engine`).
     """
     Base.metadata.create_all(engine)
+    return _add_missing_columns(engine)

@@ -152,6 +152,10 @@ class EpisodeKpi(Base):
     wait_p95: Mapped[float | None] = mapped_column(Float, nullable=True)  # s
     fairness_std: Mapped[float | None] = mapped_column(Float, nullable=True)  # s, stddev across 12 mvts
     per_movement_max_wait: Mapped[list | None] = mapped_column(JSON, nullable=True)  # s[12]
+    # E5 (open-items): the per-movement p95 wait alongside the absolute max, and the scalar
+    # worst-movement max the eval table/plots query directly (kpi_extractor emits both).
+    per_movement_p95_wait: Mapped[list | None] = mapped_column(JSON, nullable=True)  # s[12]
+    worst_movement_max_wait: Mapped[float | None] = mapped_column(Float, nullable=True)  # s
 
     episode: Mapped["Episode"] = relationship(back_populates="kpi")
 

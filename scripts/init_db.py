@@ -36,7 +36,9 @@ def main() -> None:
 
     args.db.parent.mkdir(parents=True, exist_ok=True)
     engine = create_db_engine(args.db)
-    init_db(engine)
+    added = init_db(engine)
+    if added:
+        print(f"[init_db] migrated - added columns: {', '.join(added)}")
 
     tables = sorted(inspect(engine).get_table_names())
     journal_mode = engine.raw_connection().driver_connection.execute(
