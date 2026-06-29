@@ -110,6 +110,9 @@ def main() -> None:
     parser.add_argument("--bc-warmstart-webster", action="store_true",
                         help="behavior-clone Webster into the agent before online RL (start at "
                              "Webster's robustness, then improve - the sess16 best-tradeoff pick)")
+    parser.add_argument("--train-scenarios", nargs="+", default=None,
+                        help="override the training scenario rotation (default SCN-01 SCN-02 SCN-03); "
+                             "e.g. add a shifting scenario: --train-scenarios SCN-01 SCN-02 SCN-03 SCN-10")
     parser.add_argument("--validation-every", type=int, default=25,
                         help="validate every N episodes (0 disables; default 25)")
     parser.add_argument("--validation-episodes", type=int, default=5,
@@ -146,6 +149,7 @@ def main() -> None:
         switch_penalty=args.switch_penalty,
         gridlock_penalty_mu=args.gridlock_penalty,
         gridlock_queue_threshold=args.gridlock_threshold,
+        train_scenarios=tuple(args.train_scenarios) if args.train_scenarios else ("SCN-01", "SCN-02", "SCN-03"),
         validation_every=args.validation_every,
         validation_episodes=args.validation_episodes,
         checkpoint_every=args.checkpoint_every,

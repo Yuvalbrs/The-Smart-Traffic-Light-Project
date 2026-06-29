@@ -1,0 +1,26 @@
+# SCN-08 — Fast-shifting feasible (sess17 campaign attempt #7, 2026-06-29)
+# Targets the dimension where adaptive control SHOULD beat a fixed cycle: TEMPORAL VARIABILITY,
+# not load level (SCN-07 showed steady imbalance is Webster's home turf). Two anti-phase sinusoids
+# (180deg apart, 300 s period): when N/S surges to 600 the E/W axis drops to 100, and vice versa.
+# The instantaneous TOTAL stays ~700 vph (well under the ~1650 capacity -> gridlock-safe, like
+# SCN-04's level), but the OPTIMAL green split flips every ~2.5 min. Webster computes ONE fixed
+# split from the (symmetric) mean and cannot track the flips -> wastes green on the light axis half
+# the time; the DQN re-decides every 10 s and can follow. If the DQN beats Webster on wait here,
+# this is the "beats Webster" regime - and the natural place to then layer the proven-skilled
+# forecaster (anticipate the next shift). Held-out test scenario (DQN trains on SCN-01/02/03);
+# exploratory future-work, not a pre-registration amendment.
+id: SCN-08
+name: Fast-shifting feasible
+description: Two anti-phase sinusoids (300 s period), total ~700 vph steady but the per-axis split swings 100..600. Tests whether the DQN's adaptivity beats Webster's fixed cycle under fast variation.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: sinusoidal, vph_min: 100, vph_max: 600, period_s: 300, phase_offset_deg: 0}
+  ew: {profile: sinusoidal, vph_min: 100, vph_max: 600, period_s: 300, phase_offset_deg: 180}
