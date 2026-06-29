@@ -319,6 +319,17 @@ class SUMOEnv(gym.Env):
         obs = self._observe(pressures)
         return obs, reward, terminated, truncated, self._info(done=terminated or truncated)
 
+    @property
+    def departed_count(self) -> int:
+        """Cumulative vehicles inserted into the network so far this episode.
+
+        A controller-INDEPENDENT demand signal (insertion is driven by the route file's arrival
+        process, not by how the lights are timed - unless gridlock blocks insertion). Used by the
+        episode-level selector to judge demand from a short safe probe, where queue/pressure would
+        instead reflect how well the probe controller coped rather than how much traffic arrived.
+        """
+        return self._departed
+
     def movement_features(self) -> tuple[np.ndarray, np.ndarray]:
         """Return ``(queue[12], count[12])`` per movement at the current state.
 

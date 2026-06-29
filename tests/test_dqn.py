@@ -23,7 +23,15 @@ import pytest
 import torch
 
 from scripts.build_network import build_net
-from src.ml.dqn import N_PHASES, OBS_DIM, Batch, DQNAgent, QNetwork
+from src.ml.dqn import (
+    N_PHASES,
+    N_QUANTILES,
+    OBS_DIM,
+    Batch,
+    DQNAgent,
+    IQNQNetwork,
+    QNetwork,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -197,3 +205,113 @@ def test_reward_sanity_step0_bounded_under_load(tmp_path) -> None:
         assert -70.0 <= reward <= 0.0
     finally:
         env.close()
+
+
+# --- T-03-09: distributional IQN + CVaR (risk-sensitive DQN) ---
+
+@pytest.mark.parametrize("obs_dim", [OBS_DIM, 56])
+def test_iqn_shape(obs_dim: int) -> None:
+    """IQN maps (obs, tau-grid) -> one return quantile per (sample, tau, action)."""
+    net = IQNQNetwork(obs_dim)
+    taus = torch.rand(4, N_QUANTILES)
+    out = net(torch.randn(4, obs_dim), taus)
+    assert tuple(out.shape) == (4, N_QUANTILES, N_PHASES)
+
+
+def test_distributional_loss_decreases_on_fixed_batch() -> None:
+    """The quantile-Huber TD loss drives down when fitting a fixed batch (IQN smoke)."""
+    agent = DQNAgent(obs_dim=OBS_DIM, seed=0, distributional=True)
+    b = 32
+    torch.manual_seed(0)
+    batch = Batch(
+        obs=torch.randn(b, OBS_DIM),
+        action=torch.randint(0, N_PHASES, (b,)),
+        reward=torch.randn(b),
+        next_obs=torch.randn(b, OBS_DIM),
+        done=torch.zeros(b),
+        next_mask=torch.ones(b, N_PHASES, dtype=torch.bool),
+    )
+    first = agent.learn(batch)
+    last = first
+    for _ in range(200):
+        last = agent.learn(batch)
+    assert last < first
+
+
+def test_cvar_selection_differs_from_mean() -> None:
+    """Rigged return heads: action 0 has the higher MEAN but a heavy lower tail; action 1 is tight.
+
+    Risk-neutral (alpha=1) must prefer the high-mean action 0; risk-averse CVaR (alpha=0.1) must
+    avoid its tail and pick action 1. This is the whole point of the contribution - selecting on the
+    worst-case end of the distribution changes the decision.
+    """
+    agent = DQNAgent(seed=0, distributional=True)
+
+    def rigged(_obs, taus):  # (B, N) -> (B, N, A); only actions 0,1 are in play
+        z = torch.full((*taus.shape, N_PHASES), -1e3)
+        z[..., 0] = torch.where(taus < 0.1, torch.full_like(taus, -100.0), torch.full_like(taus, 40.0))
+        z[..., 1] = 20.0
+        return z
+
+    agent.online = rigged  # type: ignore[assignment]
+    mask = np.array([True, True] + [False] * (N_PHASES - 2))
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
+
+    agent.cvar_alpha = 1.0
+    assert agent.act(obs, mask, epsilon=0.0) == 0  # high mean wins when risk-neutral
+    agent.cvar_alpha = 0.1
+    assert agent.act(obs, mask, epsilon=0.0) == 1  # heavy lower tail loses when risk-averse
+
+
+def test_distributional_act_respects_mask() -> None:
+    """Per-quantile CVaR selection still never returns a forbidden action (greedy or exploring)."""
+    agent = DQNAgent(seed=1, distributional=True)
+    mask = np.array([False, True, False, True, False, False, False, False])
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
+    for _ in range(20):
+        assert mask[agent.act(obs, mask, epsilon=0.0)]
+    for _ in range(50):
+        assert mask[agent.act(obs, mask, epsilon=1.0)]
+
+
+def test_distributional_greedy_is_deterministic() -> None:
+    """CVaR action-selection uses a FIXED tau grid (no RNG) -> reproducible greedy eval actions."""
+    agent = DQNAgent(seed=3, distributional=True)
+    mask = np.ones(N_PHASES, dtype=bool)
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
+    actions = [agent.act(obs, mask, epsilon=0.0) for _ in range(10)]
+    assert len(set(actions)) == 1
+
+
+def test_warm_start_copies_scalar_trunk() -> None:
+    """Transfer-init copies the plain QNetwork trunk+head into the IQN and syncs the target."""
+    scalar = DQNAgent(obs_dim=OBS_DIM, seed=0)
+    with torch.no_grad():  # perturb so the copy is observable, not coincidental
+        for p in scalar.online.parameters():
+            p.add_(0.5)
+    iqn = DQNAgent(obs_dim=OBS_DIM, seed=1, distributional=True)
+    iqn.warm_start_from_scalar(scalar.online.state_dict())
+    sd = scalar.online.state_dict()
+    assert torch.equal(iqn.online.psi[0].weight, sd["net.0.weight"])
+    assert torch.equal(iqn.online.psi[2].weight, sd["net.2.weight"])
+    assert torch.equal(iqn.online.head[1].weight, sd["net.4.weight"])
+    assert torch.equal(iqn.target.psi[0].weight, iqn.online.psi[0].weight)  # target synced
+
+
+def test_warm_start_requires_distributional() -> None:
+    scalar = DQNAgent(obs_dim=OBS_DIM, seed=0)
+    with pytest.raises(ValueError):
+        DQNAgent(obs_dim=OBS_DIM, seed=1).warm_start_from_scalar(scalar.online.state_dict())
+
+
+def test_pretrain_bc_clones_guide_actions() -> None:
+    """Behavior cloning makes the agent's masked greedy action match the guide's labels."""
+    agent = DQNAgent(obs_dim=OBS_DIM, seed=0, distributional=True)
+    rng = np.random.default_rng(0)
+    n = 256
+    states = rng.standard_normal((n, OBS_DIM)).astype(np.float32)
+    masks = np.ones((n, N_PHASES), dtype=bool)
+    guide = np.where(states[:, 0] > 0, 3, 0).astype(np.int64)  # a learnable state->action rule
+    agent.pretrain_bc(states, guide, masks, epochs=40, batch_size=64)
+    preds = np.array([agent.act(states[i], masks[i], epsilon=0.0) for i in range(n)])
+    assert (preds == guide).mean() > 0.85  # clone reproduces the guide on most states

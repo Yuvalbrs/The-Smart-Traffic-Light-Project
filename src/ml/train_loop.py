@@ -88,6 +88,13 @@ class TrainConfig:
     grad_clip: float = 10.0
     batch_size: int = 64
 
+    # distributional / risk-sensitive (T-03-09): IQN + CVaR action-selection
+    distributional: bool = False  # True -> IQN agent (quantile-Huber loss, CVaR act)
+    cvar_alpha: float = 1.0        # CVaR risk level for act() + bootstrap; 1.0 = risk-neutral.
+    warm_start_ckpt: str | None = None  # plain-DQN checkpoint to transfer-init the IQN trunk/head
+    bc_warmstart_controller: str | None = None  # guide cloned before online RL (e.g. "webster")
+    bc_epochs: int = 10            # behavior-cloning pretrain epochs when a guide dataset is given
+
     # replay
     buffer_capacity: int = CAPACITY
     min_replay: int = MIN_REPLAY
@@ -314,6 +321,7 @@ def train(
     make_val_env: ValEnvFactory,
     run_dir: str | Path,
     resume: str | Path | None = None,
+    bc_dataset: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> RunResult:
     """Run the full DQN training loop and return a :class:`RunResult`.
 
@@ -326,8 +334,19 @@ def train(
     _set_global_seeds(cfg.seed)
 
     agent = DQNAgent(
-        cfg.obs_dim, gamma=cfg.gamma, lr=cfg.lr, grad_clip=cfg.grad_clip, seed=cfg.seed
+        cfg.obs_dim, gamma=cfg.gamma, lr=cfg.lr, grad_clip=cfg.grad_clip, seed=cfg.seed,
+        distributional=cfg.distributional, cvar_alpha=cfg.cvar_alpha,
     )
+    # the knob must reach the machine (sess14 scar): config records distributional/cvar_alpha,
+    # so assert the constructed agent actually matches what config.yaml will claim.
+    assert agent.distributional == cfg.distributional, "distributional flag did not reach the agent"
+    if cfg.distributional and cfg.warm_start_ckpt:  # transfer-init from a trained plain DQN
+        warm = torch.load(cfg.warm_start_ckpt, map_location=agent.device)
+        agent.warm_start_from_scalar(warm["online"])
+    if bc_dataset is not None and resume is None:  # behavior-clone a guide (e.g. Webster) first
+        bc_loss = agent.pretrain_bc(*bc_dataset, epochs=cfg.bc_epochs)
+        print(f"[train] BC warm-start from {cfg.bc_warmstart_controller}: "
+              f"{len(bc_dataset[0])} transitions, final loss {bc_loss:.4f}", flush=True)
     # Decorrelate the sampling RNG from the exploration RNG (both would otherwise be Random(seed)).
     buffer = ReplayBuffer(cfg.buffer_capacity, n_actions=N_PHASES, seed=cfg.seed + 1_000_000)
 

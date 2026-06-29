@@ -87,10 +87,18 @@ class Algo:
     ckpt: str | None = None
 
 
-def _load_agent(ckpt: Path, obs_dim: int) -> DQNAgent:
-    """Load a trained DQN's online net (greedy eval); the target/optimizer are not needed."""
-    agent = DQNAgent(obs_dim)
+def _load_agent(ckpt: Path, obs_dim: int, *, cvar_alpha: float | None = None) -> DQNAgent:
+    """Load a trained DQN's online net (greedy eval); the target/optimizer are not needed.
+
+    Reads the checkpoint's own ``config`` so a distributional (IQN) checkpoint rebuilds the right
+    architecture automatically. ``cvar_alpha`` overrides the saved risk level - the lever for the
+    eval-time alpha sweep (one trained IQN, many risk levels) since CVaR is an action-selection knob.
+    """
     state = torch.load(ckpt, map_location="cpu")
+    cfg = state.get("config", {}) or {}
+    distributional = bool(cfg.get("distributional", False))
+    alpha = cvar_alpha if cvar_alpha is not None else float(cfg.get("cvar_alpha", 1.0))
+    agent = DQNAgent(obs_dim, distributional=distributional, cvar_alpha=alpha)
     agent.online.load_state_dict(state["online"])
     agent.online.eval()
     return agent

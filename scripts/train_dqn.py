@@ -37,14 +37,47 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from scripts.build_network import build_net
-from scripts.env_factory import build_env
+from scripts.env_factory import build_env, load_scenario_by_id
+from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
+
+
+def _collect_webster_transitions(scenarios, seeds, episode_length):
+    """Roll Webster through each (scenario, seed) and log (obs, webster_action, mask) per step.
+
+    The behavior-cloning dataset for the Webster warm-start: cloning these (state -> Webster action)
+    pairs starts the agent near Webster's robust policy. Covers the train scenarios + the (light)
+    val scenario so the clone learns Webster's behaviour across demand regimes.
+    """
+    states, actions, masks = [], [], []
+    for scn_id in scenarios:
+        plan = webster_plan_for_scenario(load_scenario_by_id(scn_id))
+        for seed in seeds:
+            env = build_env(scn_id, seed, episode_length_s=episode_length)
+            ctrl = WebsterController(plan)
+            obs, info = env.reset()
+            ctrl.reset(env)
+            done = False
+            while not done:
+                mask = info["mask"]
+                a = ctrl.select_action(obs, mask)
+                states.append(np.asarray(obs, dtype=np.float32))
+                actions.append(int(a))
+                masks.append(np.asarray(mask, dtype=bool))
+                obs, _r, terminated, truncated, info = env.step(a)
+                done = terminated or truncated
+            env.close()
+    return (np.asarray(states, dtype=np.float32),
+            np.asarray(actions, dtype=np.int64),
+            np.asarray(masks, dtype=bool))
 
 
 def main() -> None:
@@ -67,6 +100,16 @@ def main() -> None:
                         help="path to the frozen LSTM checkpoint -> 56-dim hybrid run")
     parser.add_argument("--random-lstm", action="store_true",
                         help="56-dim run with a frozen UNTRAINED forecaster (random-LSTM control)")
+    parser.add_argument("--distributional", action="store_true",
+                        help="T-03-09: train an IQN (risk-sensitive DQN); CVaR set at eval via --cvar-alpha")
+    parser.add_argument("--cvar-alpha", type=float, default=1.0,
+                        help="CVaR risk level for action-selection AND the bootstrap (1.0=risk-neutral; "
+                             "<1 trains risk-averse end to end)")
+    parser.add_argument("--warm-start-from", default=None,
+                        help="plain-DQN checkpoint to transfer-init the IQN trunk/head (fixes undertraining)")
+    parser.add_argument("--bc-warmstart-webster", action="store_true",
+                        help="behavior-clone Webster into the agent before online RL (start at "
+                             "Webster's robustness, then improve - the sess16 best-tradeoff pick)")
     parser.add_argument("--validation-every", type=int, default=25,
                         help="validate every N episodes (0 disables; default 25)")
     parser.add_argument("--validation-episodes", type=int, default=5,
@@ -89,7 +132,8 @@ def main() -> None:
         variant = args.variant or "hybrid"
         forecaster, fc_label = load_forecaster(args.forecast_ckpt), args.forecast_ckpt
     else:
-        variant = args.variant or "plain"
+        default = "iqn-webster" if args.bc_warmstart_webster else ("iqn" if args.distributional else "plain")
+        variant = args.variant or default
         forecaster, fc_label = None, None
     run_dir = (Path(args.run_dir) if args.run_dir
                else _RUNS_DIR / f"{variant}_seed{args.seed}").resolve()
@@ -107,6 +151,10 @@ def main() -> None:
         checkpoint_every=args.checkpoint_every,
         forecast=forecaster is not None,
         forecast_ckpt=fc_label,
+        distributional=args.distributional,
+        cvar_alpha=args.cvar_alpha,
+        warm_start_ckpt=args.warm_start_from,
+        bc_warmstart_controller="webster" if args.bc_warmstart_webster else None,
         log_steps=not args.no_log_steps,
         git_sha=git_sha(short=True) or "",
     )
@@ -129,6 +177,13 @@ def main() -> None:
             gridlock_queue_threshold=cfg.gridlock_queue_threshold,
         )
 
+    bc_dataset = None
+    if args.bc_warmstart_webster:
+        scns = list(cfg.train_scenarios) + [cfg.val_scenario]
+        print(f"[train] collecting Webster BC dataset over {scns} ...", flush=True)
+        bc_dataset = _collect_webster_transitions(scns, seeds=(1, 2), episode_length=args.episode_length)
+        print(f"[train] Webster BC dataset: {len(bc_dataset[0])} transitions", flush=True)
+
     print(f"[train] variant={variant} seed={args.seed} obs_dim={cfg.obs_dim} "
           f"episodes={cfg.n_episodes} lambda={cfg.switch_penalty} "
           f"eps_decay_steps={cfg.eps_decay_steps} -> {run_dir}")
@@ -138,6 +193,7 @@ def main() -> None:
         make_val_env=make_val_env,
         run_dir=run_dir,
         resume=args.resume,
+        bc_dataset=bc_dataset,
     )
     print(f"[train] OK - {result.episodes_completed} episodes, {result.total_steps} steps, "
           f"best_val_reward={result.best_val_reward:.1f} -> {result.run_dir}")
