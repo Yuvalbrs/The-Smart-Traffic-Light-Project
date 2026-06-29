@@ -1,0 +1,25 @@
+# SCN-07 — Imbalanced near-saturation (sess17, 2026-06-29)
+# The untested 2x2 cell: imbalanced AND heavy. SCN-04 proves the DQN beats Webster on
+# light+imbalanced demand (wait 2s vs 11s), but SCN-06 (heavy+balanced) shows the edge
+# erodes to a tie as load rises. This scenario isolates whether the DQN's adaptivity
+# advantage SURVIVES when a strongly-lopsided demand approaches capacity: sustained
+# (constant) N/S-heavy vs E/W-light, total ~1200 vph (~73% of ~1650 capacity), ratio ~3.8:1.
+# Constant (not sinusoidal) so the test is steady-state imbalance, the regime Webster's
+# fixed proportional split should handle best - the hardest case for "adaptive beats fixed".
+# Held-out test scenario (the DQN trains on SCN-01/02/03); exploratory future-work, not a
+# pre-registration amendment.
+id: SCN-07
+name: Imbalanced near-saturation
+description: Sustained lopsided demand (N/S heavy 800, E/W light 200) near the imbalanced feasibility ceiling. Tests whether the DQN's wait edge over Webster survives high imbalanced load. (950/250 gridlocked all incl. Webster -> imbalance caps feasible total below the balanced 1283; dialed to 800/200.)
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: constant, vph: 800}
+  ew: {profile: constant, vph: 200}
