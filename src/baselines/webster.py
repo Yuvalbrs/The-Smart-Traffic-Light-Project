@@ -121,6 +121,11 @@ def _peak_rate(axis, duration_s: int, *, step_s: int = 30) -> float:
 
 def webster_plan_for_scenario(scenario: "Scenario", **kwargs) -> WebsterPlan:
     """Build a Webster plan from a scenario's peak demand + its turn split."""
+    if scenario.is_arterial:
+        raise ValueError(
+            f"{scenario.id}: webster_plan_for_scenario is single-intersection only; "
+            "arterial scenarios need one plan per junction (see coordinated_webster_pair)"
+        )
     ns = _peak_rate(scenario.ns, scenario.duration_s)
     ew = _peak_rate(scenario.ew, scenario.duration_s)
     return compute_webster_plan(ns, ew, scenario.turn_split, **kwargs)

@@ -97,6 +97,8 @@ def test_stateless_and_deterministic() -> None:
 
 def test_max_pressure_drives_env_on_all_scenarios(tmp_path) -> None:
     for scn in load_all():
+        if scn.is_arterial:  # single-intersection DoD; corridor wiring is step 6/7
+            continue
         route = write_routes(scn, 0, out_dir=tmp_path)
         ctrl = MaxPressureController.from_spec()
         env = SUMOEnv(route, episode_length_s=120)

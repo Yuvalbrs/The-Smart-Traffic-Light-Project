@@ -78,6 +78,8 @@ def test_controller_is_a_noop() -> None:
 def test_actuated_drives_env_on_all_scenarios(tmp_path) -> None:
     build_actuated_add()  # ensure the committed add-file matches the current net
     for scn in load_all():
+        if scn.is_arterial:  # single-intersection DoD; corridor wiring is step 6/7
+            continue
         route = write_routes(scn, 0, out_dir=tmp_path)
         ctrl = SUMOActuatedController()
         env = SUMOEnv(route, episode_length_s=150, signal_mode="actuated")

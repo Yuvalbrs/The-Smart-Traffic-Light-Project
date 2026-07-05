@@ -69,6 +69,8 @@ def test_plan_is_deterministic() -> None:
 
 def test_plan_for_all_five_scenarios() -> None:
     for scn in load_all():
+        if scn.is_arterial:  # single-intersection DoD; corridor wiring is step 6/7
+            continue
         plan = webster_plan_for_scenario(scn)
         assert plan.status in {"normal", "degraded", "na"}
         assert len(plan.phases) == 4
