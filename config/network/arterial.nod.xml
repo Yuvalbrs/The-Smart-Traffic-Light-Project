@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Step-1 (arterial pivot) nodes: TWO signalised junctions on an east-west arterial.
+     C1 stays exactly at the origin (same spot as the legacy single intersection "C",
+     so the SUMO->Unity transform and all single-intersection configs remain valid);
+     C2 sits ARTERIAL_SPACING_M = 300 m east (see scripts/build_network.py).
+     Outer priority endpoints are 150 m out, as in intersection.nod.xml:
+       C1 keeps N/S/W endpoints; C2 keeps N/S/E; the E side of C1 and the W side of
+     C2 are the shared connecting edge pair (the back-pressure coupling).
+     netOffset is (0,0) by construction - asserted at build (research-sumo R4-3). -->
+<nodes>
+    <node id="C1" x="0.0"    y="0.0"    type="traffic_light"/>
+    <node id="C2" x="300.0"  y="0.0"    type="traffic_light"/>
+    <node id="N1" x="0.0"    y="150.0"  type="priority"/>
+    <node id="S1" x="0.0"    y="-150.0" type="priority"/>
+    <node id="W1" x="-150.0" y="0.0"    type="priority"/>
+    <node id="N2" x="300.0"  y="150.0"  type="priority"/>
+    <node id="S2" x="300.0"  y="-150.0" type="priority"/>
+    <node id="E2" x="450.0"  y="0.0"    type="priority"/>
+</nodes>

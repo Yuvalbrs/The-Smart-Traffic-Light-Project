@@ -111,11 +111,25 @@ class Intersection:
         movements_path: str | Path = _VAULT_MOVEMENTS,
         binding_path: str | Path = _BINDING_FILE,
     ) -> "Intersection":
-        """Build the model from the live connection + the spec/binding files."""
+        """Build the model from the live connection + the spec/binding files.
+
+        Supports both binding schemas: the multi-TLS arterial artifact
+        (``{tls_id: {link_indices: {...}}, ...}``, looked up by ``tls_id``) and
+        the legacy single-TLS one (``{tls_id: C, link_indices: {...}}``).
+        """
         spec = yaml.safe_load(Path(movements_path).read_text(encoding="utf-8"))
         movements = spec["movements"]
         phases = spec["phases"]
-        binding = yaml.safe_load(Path(binding_path).read_text(encoding="utf-8"))["link_indices"]
+        raw_binding = yaml.safe_load(Path(binding_path).read_text(encoding="utf-8"))
+        if tls_id in raw_binding:  # multi-TLS schema (arterial)
+            binding = raw_binding[tls_id]["link_indices"]
+        elif "link_indices" in raw_binding:  # legacy single-TLS schema
+            binding = raw_binding["link_indices"]
+        else:
+            raise ValueError(
+                f"binding file {binding_path} has no entry for TLS {tls_id!r} "
+                "and no legacy 'link_indices' key"
+            )
 
         movement_ids = sorted(movements, key=lambda m: int(m[1:]))  # M0..M11
         free = [m for m in movement_ids if not movements[m]["controlled"]]

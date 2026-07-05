@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Step-1 (arterial pivot) edges: one incoming + one outgoing edge per approach,
+     3 lanes each, 13.89 m/s - same cross-section as intersection.edg.xml.
+     Naming: {from}_{to} with node ids lowercased, e.g. n1_c1 = N1->C1 incoming,
+     c1_n1 = C1->N1 outgoing. The SHARED pair c1_c2 / c2_c1 is both an out-edge of
+     one junction and the in-edge of the other - this is the back-pressure coupling
+     between the two signals (300 m long, vs 150 m outer approaches).
+     Lane allocation (MPLight) is wired in arterial.con.xml, NOT by lane-name. -->
+<edges>
+    <!-- C1 outer approaches (N/S/W) -->
+    <edge id="n1_c1" from="N1" to="C1" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c1_n1" from="C1" to="N1" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="s1_c1" from="S1" to="C1" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c1_s1" from="C1" to="S1" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="w1_c1" from="W1" to="C1" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c1_w1" from="C1" to="W1" numLanes="3" speed="13.89" priority="1"/>
+    <!-- C2 outer approaches (N/S/E) -->
+    <edge id="n2_c2" from="N2" to="C2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c2_n2" from="C2" to="N2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="s2_c2" from="S2" to="C2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c2_s2" from="C2" to="S2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="e2_c2" from="E2" to="C2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c2_e2" from="C2" to="E2" numLanes="3" speed="13.89" priority="1"/>
+    <!-- shared connecting pair: C1's east out-edge IS C2's west in-edge (and vice versa) -->
+    <edge id="c1_c2" from="C1" to="C2" numLanes="3" speed="13.89" priority="1"/>
+    <edge id="c2_c1" from="C2" to="C1" numLanes="3" speed="13.89" priority="1"/>
+</edges>

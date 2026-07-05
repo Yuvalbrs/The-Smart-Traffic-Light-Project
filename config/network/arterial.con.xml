@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Step-1 (arterial pivot) connections = the MPLight lane allocation at BOTH
+     junctions, wired explicitly (same scheme as intersection.con.xml):
+       lane 2 (leftmost)  -> LEFT turn only          (controlled "left" movement)
+       lane 1 (middle)    -> THROUGH only            (controlled "through" movement)
+       lane 0 (rightmost) -> THROUGH + RIGHT          (FREE movement, never controlled)
+     Geometric turns (both are '+' junctions; approach -> out-approach):
+       N (southbound): left->E  through->S  right->W
+       E (westbound):  left->S  through->W  right->N
+       S (northbound): left->W  through->N  right->E
+       W (eastbound):  left->N  through->E  right->S
+     At C1 the E approach is the shared edge c2_c1 (E out-edge is c1_c2);
+     at C2 the W approach is the shared edge c1_c2 (W out-edge is c2_c1). -->
+<connections>
+    <!-- ===== C1 ===== -->
+    <!-- North approach (n1_c1) -->
+    <connection from="n1_c1" to="c1_c2" fromLane="2" toLane="2"/>  <!-- M0  N left   (controlled) -->
+    <connection from="n1_c1" to="c1_s1" fromLane="1" toLane="1"/>  <!-- M1  N through(controlled) -->
+    <connection from="n1_c1" to="c1_s1" fromLane="0" toLane="0"/>  <!-- M2  N right-lane through (free) -->
+    <connection from="n1_c1" to="c1_w1" fromLane="0" toLane="0"/>  <!-- M2  N right  (free) -->
+
+    <!-- East approach (c2_c1, the shared edge from C2) -->
+    <connection from="c2_c1" to="c1_s1" fromLane="2" toLane="2"/>  <!-- M3  E left   (controlled) -->
+    <connection from="c2_c1" to="c1_w1" fromLane="1" toLane="1"/>  <!-- M4  E through(controlled) -->
+    <connection from="c2_c1" to="c1_w1" fromLane="0" toLane="0"/>  <!-- M5  E right-lane through (free) -->
+    <connection from="c2_c1" to="c1_n1" fromLane="0" toLane="0"/>  <!-- M5  E right  (free) -->
+
+    <!-- South approach (s1_c1) -->
+    <connection from="s1_c1" to="c1_w1" fromLane="2" toLane="2"/>  <!-- M6  S left   (controlled) -->
+    <connection from="s1_c1" to="c1_n1" fromLane="1" toLane="1"/>  <!-- M7  S through(controlled) -->
+    <connection from="s1_c1" to="c1_n1" fromLane="0" toLane="0"/>  <!-- M8  S right-lane through (free) -->
+    <connection from="s1_c1" to="c1_c2" fromLane="0" toLane="0"/>  <!-- M8  S right  (free) -->
+
+    <!-- West approach (w1_c1) -->
+    <connection from="w1_c1" to="c1_n1" fromLane="2" toLane="2"/>  <!-- M9  W left   (controlled) -->
+    <connection from="w1_c1" to="c1_c2" fromLane="1" toLane="1"/>  <!-- M10 W through(controlled) -->
+    <connection from="w1_c1" to="c1_c2" fromLane="0" toLane="0"/>  <!-- M11 W right-lane through (free) -->
+    <connection from="w1_c1" to="c1_s1" fromLane="0" toLane="0"/>  <!-- M11 W right  (free) -->
+
+    <!-- ===== C2 ===== -->
+    <!-- North approach (n2_c2) -->
+    <connection from="n2_c2" to="c2_e2" fromLane="2" toLane="2"/>  <!-- M0  N left   (controlled) -->
+    <connection from="n2_c2" to="c2_s2" fromLane="1" toLane="1"/>  <!-- M1  N through(controlled) -->
+    <connection from="n2_c2" to="c2_s2" fromLane="0" toLane="0"/>  <!-- M2  N right-lane through (free) -->
+    <connection from="n2_c2" to="c2_c1" fromLane="0" toLane="0"/>  <!-- M2  N right  (free) -->
+
+    <!-- East approach (e2_c2) -->
+    <connection from="e2_c2" to="c2_s2" fromLane="2" toLane="2"/>  <!-- M3  E left   (controlled) -->
+    <connection from="e2_c2" to="c2_c1" fromLane="1" toLane="1"/>  <!-- M4  E through(controlled) -->
+    <connection from="e2_c2" to="c2_c1" fromLane="0" toLane="0"/>  <!-- M5  E right-lane through (free) -->
+    <connection from="e2_c2" to="c2_n2" fromLane="0" toLane="0"/>  <!-- M5  E right  (free) -->
+
+    <!-- South approach (s2_c2) -->
+    <connection from="s2_c2" to="c2_c1" fromLane="2" toLane="2"/>  <!-- M6  S left   (controlled) -->
+    <connection from="s2_c2" to="c2_n2" fromLane="1" toLane="1"/>  <!-- M7  S through(controlled) -->
+    <connection from="s2_c2" to="c2_n2" fromLane="0" toLane="0"/>  <!-- M8  S right-lane through (free) -->
+    <connection from="s2_c2" to="c2_e2" fromLane="0" toLane="0"/>  <!-- M8  S right  (free) -->
+
+    <!-- West approach (c1_c2, the shared edge from C1) -->
+    <connection from="c1_c2" to="c2_n2" fromLane="2" toLane="2"/>  <!-- M9  W left   (controlled) -->
+    <connection from="c1_c2" to="c2_e2" fromLane="1" toLane="1"/>  <!-- M10 W through(controlled) -->
+    <connection from="c1_c2" to="c2_e2" fromLane="0" toLane="0"/>  <!-- M11 W right-lane through (free) -->
+    <connection from="c1_c2" to="c2_s2" fromLane="0" toLane="0"/>  <!-- M11 W right  (free) -->
+</connections>
