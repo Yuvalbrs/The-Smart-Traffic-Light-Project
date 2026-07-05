@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-written smoke traffic for the two-intersection arterial (C1 + C2).
+     Tiny, deterministic, constant flows crossing BOTH junctions plus the four
+     cross-streets, so both TLS see non-trivial pressure. NOT the real corridor
+     demand generator (scripts/build_routes.py owns that) - test fixture only. -->
+<routes>
+    <vType id="passenger" vClass="passenger"/>
+
+    <!-- Corridor through both junctions (the coupling edges c1_c2 / c2_c1). -->
+    <flow id="eb" type="passenger" begin="0" end="3600" period="6"
+          departLane="best" departSpeed="max">
+        <route edges="w1_c1 c1_c2 c2_e2"/>
+    </flow>
+    <flow id="wb" type="passenger" begin="0" end="3600" period="6"
+          departLane="best" departSpeed="max">
+        <route edges="e2_c2 c2_c1 c1_w1"/>
+    </flow>
+
+    <!-- Cross-street through movements at C1. -->
+    <flow id="c1_ns" type="passenger" begin="0" end="3600" period="10"
+          departLane="best" departSpeed="max">
+        <route edges="n1_c1 c1_s1"/>
+    </flow>
+    <flow id="c1_sn" type="passenger" begin="0" end="3600" period="10"
+          departLane="best" departSpeed="max">
+        <route edges="s1_c1 c1_n1"/>
+    </flow>
+
+    <!-- Cross-street through movements at C2. -->
+    <flow id="c2_ns" type="passenger" begin="0" end="3600" period="10"
+          departLane="best" departSpeed="max">
+        <route edges="n2_c2 c2_s2"/>
+    </flow>
+    <flow id="c2_sn" type="passenger" begin="0" end="3600" period="10"
+          departLane="best" departSpeed="max">
+        <route edges="s2_c2 c2_n2"/>
+    </flow>
+</routes>
