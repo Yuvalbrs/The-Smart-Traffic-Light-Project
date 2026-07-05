@@ -19,8 +19,12 @@ from src.scenarios.config import (
 
 # SCN-01..05 are the original locked set; SCN-06 is the calibrated near-saturation test
 # scenario added for the forecaster-rescue work (a powered hybrid-vs-plain ablation; SCN-05
-# was 78% gridlock-censored). SCN-05 is preserved untouched.
-EXPECTED_IDS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05", "SCN-06"]
+# was 78% gridlock-censored). SCN-05 is preserved untouched. SCN-07..10 are the sess17
+# robustness probes (imbalanced saturation, fast shifts, in-distribution shift retrain).
+EXPECTED_IDS = [
+    "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
+    "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
+]
 
 
 # --- DoD: the scenario files exist and load cleanly ---
