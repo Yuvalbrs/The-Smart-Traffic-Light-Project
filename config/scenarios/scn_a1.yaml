@@ -1,0 +1,24 @@
+# SCN-A1 — Arterial moderate constant (sanity floor, NOT a win scenario)
+# First corridor scenario: comfortable load at both junctions so every controller
+# (coordinated Webster, max-pressure, IQL-DQN) runs gridlock-free. Used for the
+# vertical slice and sanity gates; light load proves nothing about coordination (H4).
+# Per-approach convention (as in SCN-01..10): each listed approach emits at the given
+# vph. Rough per-junction peak load: through 250 (W1) + ~150 arriving via the coupling
+# edge + 2x200 cross = ~950 veh/h, well inside the ~1300 feasible band per junction.
+# Calibration run may adjust (scripts/verify_scenario.py).
+id: SCN-A1
+name: Arterial moderate constant
+description: Corridor sanity scenario. Constant 250 vph through + 200 vph cross at each junction.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  through: {profile: constant, vph: 250}
+  cross_c1: {profile: constant, vph: 200}
+  cross_c2: {profile: constant, vph: 200}

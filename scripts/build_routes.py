@@ -72,6 +72,103 @@ class Trip:
         return LANE_FOR_TURN[self.turn]
 
 
+# --- arterial corridor geometry (mirrors config/network/arterial.*, step-1 naming) ---
+# Entry points: (first edge, junction reached, heading of travel, demand attribute).
+_ARTERIAL_ENTRIES: dict[str, tuple[str, str, str, str]] = {
+    "W1": ("w1_c1", "C1", "E", "through"),
+    "E2": ("e2_c2", "C2", "W", "through"),
+    "N1": ("n1_c1", "C1", "S", "cross_c1"),
+    "S1": ("s1_c1", "C1", "N", "cross_c1"),
+    "N2": ("n2_c2", "C2", "S", "cross_c2"),
+    "S2": ("s2_c2", "C2", "N", "cross_c2"),
+}
+# (junction, heading, turn) -> (out_edge, next_junction | None, next_heading | None).
+# Compass turns: heading E -> left=N, right=S; heading W -> left=S, right=N;
+# heading S -> left=E, right=W; heading N -> left=W, right=E. An out-edge onto the
+# coupling pair (c1_c2 / c2_c1) continues to the other junction and samples again.
+_ARTERIAL_TURNS: dict[tuple[str, str, str], tuple[str, str | None, str | None]] = {
+    ("C1", "E", "left"): ("c1_n1", None, None),
+    ("C1", "E", "through"): ("c1_c2", "C2", "E"),
+    ("C1", "E", "right"): ("c1_s1", None, None),
+    ("C1", "W", "left"): ("c1_s1", None, None),
+    ("C1", "W", "through"): ("c1_w1", None, None),
+    ("C1", "W", "right"): ("c1_n1", None, None),
+    ("C1", "S", "left"): ("c1_c2", "C2", "E"),
+    ("C1", "S", "through"): ("c1_s1", None, None),
+    ("C1", "S", "right"): ("c1_w1", None, None),
+    ("C1", "N", "left"): ("c1_w1", None, None),
+    ("C1", "N", "through"): ("c1_n1", None, None),
+    ("C1", "N", "right"): ("c1_c2", "C2", "E"),
+    ("C2", "E", "left"): ("c2_n2", None, None),
+    ("C2", "E", "through"): ("c2_e2", None, None),
+    ("C2", "E", "right"): ("c2_s2", None, None),
+    ("C2", "W", "left"): ("c2_s2", None, None),
+    ("C2", "W", "through"): ("c2_c1", "C1", "W"),
+    ("C2", "W", "right"): ("c2_n2", None, None),
+    ("C2", "S", "left"): ("c2_e2", None, None),
+    ("C2", "S", "through"): ("c2_s2", None, None),
+    ("C2", "S", "right"): ("c2_c1", "C1", "W"),
+    ("C2", "N", "left"): ("c2_c1", "C1", "W"),
+    ("C2", "N", "through"): ("c2_n2", None, None),
+    ("C2", "N", "right"): ("c2_e2", None, None),
+}
+
+
+@dataclass(frozen=True)
+class CorridorTrip:
+    """One arterial vehicle: departure, full multi-edge route, and entry lane."""
+
+    depart: float
+    edges: tuple[str, ...]
+    first_turn: str
+
+    @property
+    def route_edges(self) -> str:
+        """The space-joined multi-edge route across one or both junctions."""
+        return " ".join(self.edges)
+
+    @property
+    def depart_lane(self) -> int:
+        """Lane index for the FIRST junction's turn (left=2, through=1, right=0)."""
+        return LANE_FOR_TURN[self.first_turn]
+
+
+def generate_corridor_trips(scenario: Scenario, seed: int) -> list[CorridorTrip]:
+    """Generate the sorted vehicle list for one arterial ``(scenario, seed)``.
+
+    Same non-homogeneous Poisson thinning as :func:`generate_trips`, but a turn is
+    sampled at EACH junction the vehicle crosses: a corridor-through or turned-in
+    vehicle that continues onto the coupling edge samples again at the far TLS.
+    """
+    rng = random.Random(seed)
+    trips: list[CorridorTrip] = []
+    for entry in sorted(_ARTERIAL_ENTRIES):  # deterministic order
+        first_edge, junction, heading, demand_attr = _ARTERIAL_ENTRIES[entry]
+        demand: AxisDemand = getattr(scenario, demand_attr)
+        lam_max = _lambda_max(demand, scenario.duration_s)
+        if lam_max <= 0:
+            continue
+        t = 0.0
+        while True:
+            t += rng.expovariate(lam_max / 3600.0)  # vph -> veh/s
+            if t >= scenario.duration_s:
+                break
+            if rng.random() > demand.rate_at(t) / lam_max:
+                continue
+            edges = [first_edge]
+            node: str | None = junction
+            head: str | None = heading
+            first_turn = ""
+            while node is not None:
+                turn = _sample_turn(rng, scenario.turn_split)
+                first_turn = first_turn or turn
+                out_edge, node, head = _ARTERIAL_TURNS[(node, head, turn)]
+                edges.append(out_edge)
+            trips.append(CorridorTrip(depart=t, edges=tuple(edges), first_turn=first_turn))
+    trips.sort(key=lambda tr: (tr.depart, tr.edges))  # depart-sorted, byte-stable ties
+    return trips
+
+
 def _lambda_max(demand: AxisDemand, duration: int) -> float:
     """Upper bound on the arrival rate over ``[0, duration]`` (grid scan, 1 s)."""
     return max(demand.rate_at(float(t)) for t in range(0, duration + 1))
@@ -135,8 +232,8 @@ def _route_xml(scenario: Scenario, seed: int, trips: list[Trip]) -> str:
 def write_routes(scenario: Scenario, seed: int, out_dir: Path = _ROUTES_DIR) -> Path:
     """Generate and write one route file; returns its path."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    trips = generate_trips(scenario, seed)
-    scn_num = scenario.id.split("-")[1]
+    trips = generate_corridor_trips(scenario, seed) if scenario.is_arterial else generate_trips(scenario, seed)
+    scn_num = scenario.id.split("-")[1].lower()
     out_path = out_dir / f"scn_{scn_num}_seed_{seed:02d}.rou.xml"
     out_path.write_text(_route_xml(scenario, seed, trips), encoding="utf-8")
     return out_path

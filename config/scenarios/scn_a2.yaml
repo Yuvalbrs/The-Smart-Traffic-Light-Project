@@ -1,0 +1,22 @@
+# SCN-A2 — Arterial near-saturation constant (coordinated-Webster's home turf)
+# Static demand high enough that coordination matters (H4 band): a correct fixed
+# offset SHOULD do well here — this is the fair-fight scenario for the green wave.
+# Rough per-junction peak: through 350 + ~210 via coupling + 2x250 cross = ~1060 veh/h
+# (cf. SCN-06's verified ~1283 peak at 0% gridlock on one junction). Below the
+# spillback wall by design; the 300 m coupling edge holds ~40+ queued vehicles.
+id: SCN-A2
+name: Arterial near-saturation constant
+description: Constant 350 vph through + 250 vph cross per junction. Static near-saturation; the offset baseline's best case.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  through: {profile: constant, vph: 350}
+  cross_c1: {profile: constant, vph: 250}
+  cross_c2: {profile: constant, vph: 250}

@@ -1,0 +1,22 @@
+# SCN-A3 — Arterial near-saturation SHIFTING through-demand (D5 mandatory; primary win scenario)
+# Variable corridor demand is where a static offset provably loses (decisions.md D5):
+# the through volume swings 150..450 vph with a 900 s period, so the green-wave
+# bandwidth a fixed plan was tuned for is wrong most of the time, while cross demand
+# stays steady. Peak per-junction load ~450 + ~270 + 2x220 = ~1160 veh/h — inside the
+# near-saturation-but-feasible band (H4), analogous to SCN-06's verified regime.
+id: SCN-A3
+name: Arterial near-saturation shifting
+description: Sinusoidal through 150-450 vph (period 900 s) + constant 220 vph cross. The static-offset breaker.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  through: {profile: sinusoidal, vph_min: 150, vph_max: 450, period_s: 900, phase_offset_deg: 0}
+  cross_c1: {profile: constant, vph: 220}
+  cross_c2: {profile: constant, vph: 220}

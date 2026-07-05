@@ -21,9 +21,12 @@ from src.scenarios.config import (
 # scenario added for the forecaster-rescue work (a powered hybrid-vs-plain ablation; SCN-05
 # was 78% gridlock-censored). SCN-05 is preserved untouched. SCN-07..10 are the sess17
 # robustness probes (imbalanced saturation, fast shifts, in-distribution shift retrain).
+# SCN-A1..A4 are the 2-intersection arterial corridor set (network-arterial-plan.md
+# step 3; near-saturation band per H4, variable demand mandatory per D5).
 EXPECTED_IDS = [
     "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
     "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
+    "SCN-A1", "SCN-A2", "SCN-A3", "SCN-A4",
 ]
 
 
@@ -35,12 +38,19 @@ def test_scenarios_load() -> None:
 
 
 def test_each_scenario_well_formed() -> None:
+    profiles = {"constant", "ramp", "sinusoidal"}
     for s in load_all():
         assert s.duration_s > 0
         assert len(s.seeds) == 10
         assert pytest.approx(sum(s.turn_split.values())) == 1.0
-        assert s.ns.profile in {"constant", "ramp", "sinusoidal"}
-        assert s.ew.profile in {"constant", "ramp", "sinusoidal"}
+        if s.is_arterial:
+            assert s.ns is None and s.ew is None
+            for axis in (s.through, s.cross_c1, s.cross_c2):
+                assert axis is not None and axis.profile in profiles
+        else:
+            assert s.through is None
+            assert s.ns.profile in profiles
+            assert s.ew.profile in profiles
 
 
 # --- demand-profile math ---

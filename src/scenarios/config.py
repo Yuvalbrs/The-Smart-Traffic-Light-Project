@@ -68,7 +68,18 @@ class AxisDemand:
 
 @dataclass(frozen=True)
 class Scenario:
-    """A validated scenario configuration."""
+    """A validated scenario configuration.
+
+    Two demand schemas are supported (mutually exclusive, decided by the YAML's
+    ``demand`` keys):
+
+    * legacy single-intersection: ``ns`` + ``ew`` axis pair (SCN-01..10);
+    * arterial corridor: ``through`` (the W1/E2 corridor entries) +
+      ``cross_c1``/``cross_c2`` (each junction's N/S cross-street approaches).
+
+    Unused fields of the other schema are ``None``; ``is_arterial`` tells the
+    consumers (route generator, Webster planner) which schema applies.
+    """
 
     id: str
     name: str
@@ -78,8 +89,16 @@ class Scenario:
     turn_split: dict[str, float]
     vehicle_type: str
     heavy_fraction: float
-    ns: AxisDemand
-    ew: AxisDemand
+    ns: AxisDemand | None = None
+    ew: AxisDemand | None = None
+    through: AxisDemand | None = None
+    cross_c1: AxisDemand | None = None
+    cross_c2: AxisDemand | None = None
+
+    @property
+    def is_arterial(self) -> bool:
+        """True when this scenario uses the arterial corridor demand schema."""
+        return self.through is not None
 
 
 def load_scenario(path: str | Path) -> Scenario:
@@ -144,9 +163,15 @@ def _build(raw: dict, where: str) -> Scenario:
         raise ScenarioError(f"{where}: vehicle.heavy_fraction must be in [0, 1]")
 
     demand = require("demand")
-    if not isinstance(demand, dict) or set(demand) != {"ns", "ew"}:
-        raise ScenarioError(f"{where}: demand must have exactly keys 'ns' and 'ew'")
+    _LEGACY_KEYS = {"ns", "ew"}
+    _ARTERIAL_KEYS = {"through", "cross_c1", "cross_c2"}
+    if not isinstance(demand, dict) or set(demand) not in (_LEGACY_KEYS, _ARTERIAL_KEYS):
+        raise ScenarioError(
+            f"{where}: demand must have exactly keys {sorted(_LEGACY_KEYS)} (legacy) "
+            f"or {sorted(_ARTERIAL_KEYS)} (arterial)"
+        )
 
+    axes = {key: _build_axis(demand[key], where, key) for key in demand}
     return Scenario(
         id=str(require("id")),
         name=str(require("name")),
@@ -156,8 +181,11 @@ def _build(raw: dict, where: str) -> Scenario:
         turn_split={k: float(v) for k, v in turn_split.items()},
         vehicle_type=str(vehicle.get("type", "passenger")),
         heavy_fraction=float(heavy_fraction),
-        ns=_build_axis(demand["ns"], where, "ns"),
-        ew=_build_axis(demand["ew"], where, "ew"),
+        ns=axes.get("ns"),
+        ew=axes.get("ew"),
+        through=axes.get("through"),
+        cross_c1=axes.get("cross_c1"),
+        cross_c2=axes.get("cross_c2"),
     )
 
 

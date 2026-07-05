@@ -1,0 +1,23 @@
+# SCN-A4 — Arterial asymmetric rush build-up (D5 variable; heterogeneous junctions)
+# Rush-hour shape: through demand ramps 150 -> 450 vph over the first 1800 s and holds,
+# while the two junctions see DIFFERENT cross-street patterns (C1 oscillating fast,
+# C2 steady). A single shared fixed plan cannot fit both junctions and the ramp at
+# once. Peak per-junction ~450 + ~270 + 2x300 (C1 surge) = ~1320 veh/h at C1's worst
+# moment — the top of the feasible band; verify_scenario.py should confirm ~0%
+# gridlock for Webster before the campaign (adjust vph_max down if not).
+id: SCN-A4
+name: Arterial asymmetric rush
+description: Through ramps 150-450 vph over 1800 s; C1 cross oscillates 100-300 (period 600 s), C2 cross constant 180.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  through: {profile: ramp, vph_start: 150, vph_end: 450, ramp_s: 1800}
+  cross_c1: {profile: sinusoidal, vph_min: 100, vph_max: 300, period_s: 600, phase_offset_deg: 0}
+  cross_c2: {profile: constant, vph: 180}
