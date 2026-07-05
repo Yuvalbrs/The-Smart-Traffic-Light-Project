@@ -134,18 +134,53 @@ class WebsterController:
     its green time has elapsed, quantized to the env's decision interval. The env
     mask is respected defensively (a scheduled action that is momentarily invalid
     is replaced by a valid one - the timers should keep this from happening).
+
+    Parameters
+    ----------
+    plan : WebsterPlan
+        Pre-computed fixed-time plan.
+    decision_interval_s : int
+        Env step duration (s); controller advances elapsed by this each call.
+    offset_s : float
+        Phase offset (s).  At :meth:`reset` the controller fast-forwards to the
+        position ``offset_s % sum(greens)`` seconds into the cycle, producing a
+        green wave when two controllers share the same :class:`WebsterPlan` cycle
+        length and carry different offsets.  ``offset_s=0`` (default) is
+        byte-identical to the legacy single-junction behaviour.
     """
 
-    def __init__(self, plan: WebsterPlan, *, decision_interval_s: int = 10) -> None:
+    def __init__(
+        self,
+        plan: WebsterPlan,
+        *,
+        decision_interval_s: int = 10,
+        offset_s: float = 0.0,
+    ) -> None:
         self.plan = plan
         self._decision_interval_s = decision_interval_s
+        self._offset_s = offset_s
         self._idx = 0
         self._elapsed = 0.0
 
     def reset(self, env=None) -> None:  # noqa: ANN001 - env unused (open-loop)
-        """Reset the cycle position to the start of the plan."""
+        """Reset the cycle position, shifted by *offset_s* (0.0 = legacy behaviour).
+
+        When ``offset_s > 0``, the controller starts as if it has already run for
+        ``offset_s`` seconds of green time, enabling green-wave coordination between
+        two controllers that share the same cycle length.
+        """
         self._idx = 0
         self._elapsed = 0.0
+        if self._offset_s > 0.0:
+            total_green = sum(g for _a, g in self.plan.phases)
+            remaining = self._offset_s % total_green
+            for i, (_action, green) in enumerate(self.plan.phases):
+                if remaining < green:
+                    self._idx = i
+                    self._elapsed = remaining
+                    return
+                remaining -= green
+            # offset lands on an exact cycle boundary -> stay at idx=0, elapsed=0.0
 
     def select_action(self, state: np.ndarray, mask: np.ndarray) -> int:  # noqa: ARG002
         """Return the scheduled phase for this decision step (mask-respecting)."""
@@ -159,3 +194,112 @@ class WebsterController:
         if not mask[action]:  # defensive: never return a masked-invalid action
             action = int(np.flatnonzero(mask)[0])
         return int(action)
+
+
+# ---------------------------------------------------------------------------
+# Coordinated (green-wave) helpers
+# ---------------------------------------------------------------------------
+
+
+def _rescale_plan_to_cycle(
+    plan: WebsterPlan,
+    new_cycle_s: float,
+    *,
+    min_green: float = MIN_GREEN,
+) -> WebsterPlan:
+    """Return *plan* with green splits rescaled to *new_cycle_s*.
+
+    Parameters
+    ----------
+    plan : WebsterPlan
+        Source plan whose green pool will be redistributed.
+    new_cycle_s : float
+        Target total cycle length (s).  Should be >= ``LOST_TIME_PER_PHASE * n``.
+    min_green : float
+        Safety floor (s).  If proportional rescaling would produce a green below
+        this value it is clamped upward; the resulting ``cycle_s`` then exceeds
+        *new_cycle_s* by the sum of those positive corrections.
+
+    Notes
+    -----
+    **Rescale rule**: let ``L = LOST_TIME_PER_PHASE * n``,
+    ``old_pool = plan.cycle_s - L``, ``new_pool = new_cycle_s - L``.
+    Each green is rescaled proportionally: ``g_new_i = new_pool * g_old_i / old_pool``.
+    The min-green floor is applied afterwards; ``cycle_s`` is set to
+    ``L + sum(g_new)``, so callers can detect whether clamping occurred by
+    comparing ``result.cycle_s`` against *new_cycle_s*.
+    """
+    n = len(plan.phases)
+    L = LOST_TIME_PER_PHASE * n
+    old_pool = plan.cycle_s - L
+    new_pool = new_cycle_s - L
+
+    new_phases: list[tuple[int, float]] = []
+    for action, g_old in plan.phases:
+        g_new = (new_pool * g_old / old_pool) if old_pool > 0.0 else (new_pool / n)
+        new_phases.append((action, float(max(min_green, g_new))))
+
+    actual_cycle = L + sum(g for _a, g in new_phases)
+    return WebsterPlan(
+        phases=tuple(new_phases),
+        cycle_s=float(actual_cycle),
+        flow_ratio_Y=plan.flow_ratio_Y,
+        status=plan.status,
+    )
+
+
+def coordinated_webster_pair(
+    plan_c1: WebsterPlan,
+    plan_c2: WebsterPlan,
+    link_travel_time_s: float,
+    *,
+    decision_interval_s: int = 10,
+    min_green: float = MIN_GREEN,
+) -> tuple[WebsterController, WebsterController]:
+    """Build a coordinated (green-wave) Webster controller pair for two junctions.
+
+    Parameters
+    ----------
+    plan_c1 : WebsterPlan
+        Webster plan for the upstream junction (C1).  Runs with ``offset_s=0``.
+    plan_c2 : WebsterPlan
+        Webster plan for the downstream junction (C2).  Receives the phase offset.
+    link_travel_time_s : float
+        Free-flow travel time from C1 to C2 (s), used as the downstream offset.
+        Typical arterial value: 300 m / 13.89 m/s ≈ 21.6 s.
+    decision_interval_s : int
+        Env decision interval forwarded to both :class:`WebsterController` instances.
+    min_green : float
+        Min-green floor applied during cycle rescaling (default: ``MIN_GREEN``).
+
+    Returns
+    -------
+    tuple[WebsterController, WebsterController]
+        ``(ctrl_c1, ctrl_c2)`` ready to call :meth:`WebsterController.reset` and
+        :meth:`WebsterController.select_action`.
+
+    Notes
+    -----
+    **Shared-cycle rule**: ``shared_cycle = max(plan_c1.cycle_s, plan_c2.cycle_s)``.
+    Both plans are rescaled proportionally to *shared_cycle* via
+    :func:`_rescale_plan_to_cycle`.  Because the shared cycle is the *maximum*
+    of the two originals, greens can only grow or stay the same; the min-green
+    floor is therefore not triggered under normal Webster inputs but is enforced
+    defensively for caller-supplied plans.
+
+    **Coordination direction**: the offset advances C2 by *link_travel_time_s*
+    seconds into its cycle at :meth:`WebsterController.reset`.  This implements the
+    W→E green wave (C1 upstream, C2 downstream).  For the reverse direction (E→W)
+    swap the plan arguments and pass the appropriate travel time.
+    """
+    shared_cycle = max(plan_c1.cycle_s, plan_c2.cycle_s)
+    scaled_c1 = _rescale_plan_to_cycle(plan_c1, shared_cycle, min_green=min_green)
+    scaled_c2 = _rescale_plan_to_cycle(plan_c2, shared_cycle, min_green=min_green)
+
+    ctrl_c1 = WebsterController(
+        scaled_c1, decision_interval_s=decision_interval_s, offset_s=0.0
+    )
+    ctrl_c2 = WebsterController(
+        scaled_c2, decision_interval_s=decision_interval_s, offset_s=link_travel_time_s
+    )
+    return ctrl_c1, ctrl_c2
