@@ -31,3 +31,11 @@ checkpoints/
 Thumbs.db
 .idea/
 .vscode/
+
+# T-04-02: the pre-registered analysis inputs + outputs ARE tracked (preregistration.md s9)
+!data/
+data/*
+!data/eval/
+data/eval/*
+!data/eval/eval_results.csv
+!data/eval/analysis/

@@ -1,0 +1,12 @@
+# C3/H3 - DQN-hybrid vs DQN-random-lstm, SCN-05 (7 hypotheses, Holm-Bonferroni)
+
+| kpi | kpi_col | direction | headline | comparison | n | dropped | median_diff | ci_lo | ci_hi | p_raw | p_holm | stars | significant | family_size |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| avg_wait | avg_waiting_time | lower | True | DQN-random-lstm | 6 | 9 | 0.5164637641482801 | -5.382371343448072 | 11.508826447703727 | 0.5625 | 1.0 |    | False | 7 |
+| avg_queue | avg_queue_length | lower | False | DQN-random-lstm | 6 | 9 | -156.84671311723721 | -178.21281429869737 | -123.30233262647683 | 0.03125 | 0.21875 |    | False | 7 |
+| throughput | throughput | higher | True | DQN-random-lstm | 6 | 9 | 1043.0 | 736.5 | 1318.5 | 0.03125 | 0.21875 |    | False | 7 |
+| num_stops | num_stops | lower | False | DQN-random-lstm | 6 | 9 | -0.3801523487187501 | -0.46807999548397977 | 0.042457126911738224 | 0.15625 | 0.625 |    | False | 7 |
+| fairness_std(5a) | fairness_std | lower | False | DQN-random-lstm | 6 | 9 | 6.26945112027631 | -13.78569837022621 | 46.903165066292836 | 0.5625 | 1.0 |    | False | 7 |
+| worst_max(5b) | worst_movement_max_wait | lower | True | DQN-random-lstm | 6 | 9 | 233.0 | -6.5 | 587.0 | 0.09375 | 0.46875 |    | False | 7 |
+| wait_p95 | wait_p95 | lower | False | DQN-random-lstm | 6 | 9 | 8.650000000000034 | -32.200000000000045 | 131.72499999999997 | 0.6875 | 1.0 |    | False | 7 |
+

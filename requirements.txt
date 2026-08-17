@@ -16,8 +16,15 @@ gymnasium
 pyyaml          # load specs/movements.yaml for the network-build assertion (T-01-02)
 sqlalchemy      # SQLite (WAL) results schema + ORM (T-01-03)
 
+# Evaluation / analysis phase (T-04-02): required by scripts/analyze_eval.py,
+# scripts/build_analysis.py and `make eval-final`.
+scipy           # Wilcoxon signed-rank (preregistration.md s5)
+pandas          # table assembly in scripts/build_analysis.py
+matplotlib      # plots P1-P5
+nbformat        # analysis/final_eval.ipynb is built programmatically
+nbconvert       # `make eval-final` re-executes the notebook in place
+ipykernel       # the python3 kernel the notebook executes against
+
 # Added in later phases (kept here as a roadmap, commented out):
 # fastapi          # systems/API phase
 # uvicorn          # systems/API phase
-# scipy            # evaluation phase (Wilcoxon signed-rank)
-# pandas           # evaluation phase

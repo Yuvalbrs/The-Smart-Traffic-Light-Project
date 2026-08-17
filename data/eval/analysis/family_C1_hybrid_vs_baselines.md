@@ -1,0 +1,26 @@
+# C1/H1 - DQN-hybrid vs 3 baselines, SCN-05 (21 hypotheses, Holm-Bonferroni)
+
+| kpi | kpi_col | direction | headline | comparison | n | dropped | median_diff | ci_lo | ci_hi | p_raw | p_holm | stars | significant | family_size |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| avg_wait | avg_waiting_time | lower | True | Webster | 12 | 3 | 3.394501401745056 | 1.118238861591981 | 8.707368115757973 | 0.01611328125 | 0.33837890625 |    | False | 21 |
+| avg_wait | avg_waiting_time | lower | True | Max-pressure | 4 | 11 | 5.844098922979203 | -4.763916834339369 | 31.153009427121102 | 0.375 | 1.0 |    | False | 21 |
+| avg_wait | avg_waiting_time | lower | True | SUMO-actuated | 9 | 6 | -3.2450319829424306 | -6.316499368292445 | 4.150226244343892 | 0.359375 | 1.0 |    | False | 21 |
+| avg_queue | avg_queue_length | lower | False | Webster | 12 | 3 | 36.95092396243563 | -31.790972432596185 | 134.58770069675856 | 0.17626953125 | 1.0 |    | False | 21 |
+| avg_queue | avg_queue_length | lower | False | Max-pressure | 6 | 9 | -182.3839745531657 | -195.81248106634354 | -162.63723114207818 | 0.03125 | 0.53125 |    | False | 21 |
+| avg_queue | avg_queue_length | lower | False | SUMO-actuated | 11 | 4 | -0.8370190851257195 | -189.86610118146015 | 156.67373523174797 | 0.51953125 | 1.0 |    | False | 21 |
+| throughput | throughput | higher | True | Webster | 12 | 3 | -432.5 | -995.5 | 157.0 | 0.1513671875 | 1.0 |    | False | 21 |
+| throughput | throughput | higher | True | Max-pressure | 6 | 9 | 1299.0 | 1153.5 | 1426.5 | 0.03125 | 0.53125 |    | False | 21 |
+| throughput | throughput | higher | True | SUMO-actuated | 11 | 4 | 61.0 | -1082.0 | 1402.0 | 0.46484375 | 1.0 |    | False | 21 |
+| num_stops | num_stops | lower | False | Webster | 12 | 3 | 0.22333230490625386 | 0.10400783423598733 | 0.4178648139120687 | 0.02099609375 | 0.3779296875 |    | False | 21 |
+| num_stops | num_stops | lower | False | Max-pressure | 4 | 11 | 0.38876884809641304 | -0.8362173038229376 | 0.9956490210297317 | 0.625 | 1.0 |    | False | 21 |
+| num_stops | num_stops | lower | False | SUMO-actuated | 9 | 6 | 0.13903761050482433 | 0.03024143723881323 | 0.4664259927797834 | 0.07421875 | 1.0 |    | False | 21 |
+| fairness_std(5a) | fairness_std | lower | False | Webster | 12 | 3 | 9.697783689522018 | 0.5274080205754181 | 21.220446151113297 | 0.01611328125 | 0.33837890625 |    | False | 21 |
+| fairness_std(5a) | fairness_std | lower | False | Max-pressure | 2 | 13 | 9.63192903357897 | -2.1233097710114386 | 21.38716783816938 | 1.0 | 1.0 |    | False | 21 |
+| fairness_std(5a) | fairness_std | lower | False | SUMO-actuated | 9 | 6 | -11.224630416951282 | -27.37352392114827 | 13.106794509658293 | 0.359375 | 1.0 |    | False | 21 |
+| worst_max(5b) | worst_movement_max_wait | lower | True | Webster | 12 | 3 | 62.0 | 31.5 | 272.0 | 0.01611328125 | 0.33837890625 |    | False | 21 |
+| worst_max(5b) | worst_movement_max_wait | lower | True | Max-pressure | 4 | 11 | 354.5 | 91.0 | 901.0 | 0.125 | 1.0 |    | False | 21 |
+| worst_max(5b) | worst_movement_max_wait | lower | True | SUMO-actuated | 9 | 6 | -81.0 | -232.0 | 142.0 | 0.8203125 | 1.0 |    | False | 21 |
+| wait_p95 | wait_p95 | lower | False | Webster | 12 | 3 | 12.924999999999955 | -0.049999999999954525 | 34.22500000000002 | 0.06396484375 | 0.95947265625 |    | False | 21 |
+| wait_p95 | wait_p95 | lower | False | Max-pressure | 4 | 11 | 29.924999999999983 | 2.4500000000001023 | 277.0999999999999 | 0.125 | 1.0 |    | False | 21 |
+| wait_p95 | wait_p95 | lower | False | SUMO-actuated | 9 | 6 | -26.199999999999974 | -57.450000000000045 | 27.0 | 0.12890625 | 1.0 |    | False | 21 |
+
