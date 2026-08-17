@@ -25,6 +25,9 @@ nbformat        # analysis/final_eval.ipynb is built programmatically
 nbconvert       # `make eval-final` re-executes the notebook in place
 ipykernel       # the python3 kernel the notebook executes against
 
-# Added in later phases (kept here as a roadmap, commented out):
-# fastapi          # systems/API phase
-# uvicorn          # systems/API phase
+# Presentation layer (T-05-01/04): the FastAPI hub, its WebSocket channels and REST replay.
+fastapi         # the hub itself (src/api/server.py)
+uvicorn         # ASGI server: python -m uvicorn src.api.server:app
+websockets      # WebSocket protocol support for uvicorn
+httpx           # test client transport (TestClient) - test-only, but import-time required
+pytest-asyncio  # the async hub/backpressure tests

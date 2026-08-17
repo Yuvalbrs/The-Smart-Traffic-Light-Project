@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import gymnasium as gym
 import numpy as np
@@ -123,6 +123,12 @@ class SUMOEnv(gym.Env):
         When set, write one ``sim_frame`` per simulated second to this JSONL file
         (the T-01-04 tracer, single-agent only). The file is rewritten fresh each
         ``reset``. Off by default (no tracing overhead).
+    on_frame : callable, optional
+        When set, called with each 1 Hz ``sim_frame`` dict as it is produced - the SAME
+        frame the tracer writes, so the live API stream and the JSONL trace can never
+        drift apart (T-05-01). Independent of ``trace_path``: either, both or neither may
+        be active. Single-agent only. The callback runs inside the simulation loop, so it
+        must not block (the API side pushes into bounded queues and returns immediately).
     tripinfo_path : str or Path, optional
         When set, tell SUMO to write per-vehicle trip-info XML (``--tripinfo-output``)
         to this path - the second artifact the KPI extractor needs. SUMO finalizes the
@@ -154,6 +160,7 @@ class SUMOEnv(gym.Env):
         additional_file: str | Path | None = None,
         trace_path: str | Path | None = None,
         tripinfo_path: str | Path | None = None,
+        on_frame: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__()
         if signal_mode not in ("rl", "actuated"):
@@ -167,6 +174,8 @@ class SUMOEnv(gym.Env):
             raise ValueError("actuated signal_mode is single-agent only")
         if self._multi_agent and trace_path is not None:
             raise ValueError("per-frame tracing is single-agent only")
+        if self._multi_agent and on_frame is not None:
+            raise ValueError("on_frame streaming is single-agent only")
 
         self._route_file = Path(route_file)
         self._net_file = Path(net_file)
@@ -190,6 +199,9 @@ class SUMOEnv(gym.Env):
         # SUMO-native per-vehicle trip-info (the KPI extractor's second input);
         # written by SUMO at simulation end, read after close().
         self._tripinfo_path = Path(tripinfo_path) if tripinfo_path is not None else None
+        # T-05-01: optional live sink for the SAME 1 Hz sim_frame the tracer writes, so the
+        # API streams the tracer's frames rather than rebuilding a parallel (driftable) one.
+        self._on_frame = on_frame
         self._tracer: JsonlWriter | None = None
         self._resolver: MovementResolver | None = None
         self._seq = 0
@@ -286,9 +298,10 @@ class SUMOEnv(gym.Env):
             for tls_id in self._tls_ids:
                 self._intersections[tls_id] = self._build_intersection(tls_id)
 
-        if self._trace_path is not None:  # fresh JSONL trace per episode (single-agent)
-            if self._resolver is None:
+        if self._trace_path is not None or self._on_frame is not None:
+            if self._resolver is None:  # needed by _build_frame for tracing AND streaming
                 self._resolver = MovementResolver.from_traci(traci, self._tls_id)
+        if self._trace_path is not None:  # fresh JSONL trace per episode (single-agent)
             if self._tracer is not None:
                 self._tracer.close()
             self._tracer = JsonlWriter(self._trace_path).__enter__()
@@ -428,6 +441,30 @@ class SUMOEnv(gym.Env):
         """
         return self._departed
 
+    @property
+    def arrived_count(self) -> int:
+        """Cumulative vehicles that completed their trip so far this episode."""
+        return self._arrived
+
+    @property
+    def loaded_count(self) -> int:
+        """Cumulative vehicles the demand has tried to insert so far this episode.
+
+        ``loaded - departed`` is the insertion backlog: demand that exists but could not enter
+        the network. On a saturated scenario this is the quantity that actually diverges.
+        """
+        return self._loaded
+
+    def movement_pressures(self) -> np.ndarray:
+        """Return the primary TLS's unnormalized ``pressure[12]`` at the current state.
+
+        The observation carries these clipped to +/-10 and scaled; the live dashboard wants the
+        raw values (T-05-01), so read them straight off the intersection model.
+        """
+        ix = self._intersections.get(self._tls_id)
+        assert ix is not None, "movement_pressures() called before reset()"
+        return ix.pressures(traci)
+
     def movement_features(self) -> tuple[np.ndarray, np.ndarray]:
         """Return ``(queue[12], count[12])`` for the primary TLS at the current state.
 
@@ -526,8 +563,12 @@ class SUMOEnv(gym.Env):
         self._loaded += traci.simulation.getLoadedNumber()
         self._departed += traci.simulation.getDepartedNumber()
         self._arrived += traci.simulation.getArrivedNumber()
-        if self._tracer is not None:  # one 1 Hz sim_frame per tick (single-agent)
-            self._tracer.write(self._build_frame())
+        if self._tracer is not None or self._on_frame is not None:
+            frame = self._build_frame()  # one 1 Hz sim_frame per tick (single-agent)
+            if self._tracer is not None:
+                self._tracer.write(frame)
+            if self._on_frame is not None:
+                self._on_frame(frame)
         return traci.simulation.getMinExpectedNumber() == 0
 
     def _build_frame(self) -> dict[str, Any]:

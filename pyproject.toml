@@ -12,3 +12,7 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# T-05-01: the API hub tests are async (bounded asyncio queues); auto mode means they
+# need no per-test event-loop boilerplate.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
