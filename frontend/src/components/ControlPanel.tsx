@@ -1,0 +1,167 @@
+import { useEffect, useState } from "react";
+import { ApiError, getControllers, getCurrentSession, startSession, stopSession } from "../lib/api";
+import type { ControllersResponse, SessionStatus } from "../lib/wire";
+
+const POLL_MS = 2000;
+
+/** Controller/scenario/seed picker + session lifecycle (POST/DELETE /sessions). */
+export function ControlPanel({ onSessionChange }: { onSessionChange: (s: SessionStatus | null) => void }) {
+  const [options, setOptions] = useState<ControllersResponse | null>(null);
+  const [controller, setController] = useState("");
+  const [scenario, setScenario] = useState("");
+  const [seed, setSeed] = useState(7000);
+  const [episodeLengthS, setEpisodeLengthS] = useState(600);
+  const [trace, setTrace] = useState(true);
+  const [session, setSession] = useState<SessionStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getControllers().then((opts) => {
+      setOptions(opts);
+      setController(opts.default.controller);
+      setScenario(opts.default.scenario);
+      setSeed(opts.default.seed);
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const s = await getCurrentSession();
+        if (!cancelled) {
+          setSession(s);
+          onSessionChange(s);
+        }
+      } catch (e) {
+        if (!cancelled && !(e instanceof ApiError && e.status === 404)) {
+          // transient network error while polling - leave the last known status displayed
+        }
+      }
+    };
+    poll();
+    const id = setInterval(poll, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const running = session?.state === "starting" || session?.state === "running";
+
+  const handleStart = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const s = await startSession({ controller, scenario, seed, episode_length_s: episodeLengthS, trace });
+      setSession(s);
+      onSessionChange(s);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await stopSession();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel control-panel">
+      <h2>Session control</h2>
+      {options && (
+        <div className="control-form">
+          <label>
+            controller
+            <select value={controller} onChange={(e) => setController(e.target.value)} disabled={running}>
+              {options.controllers.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            scenario
+            <select value={scenario} onChange={(e) => setScenario(e.target.value)} disabled={running}>
+              {options.scenarios.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            seed
+            <input
+              type="number"
+              value={seed}
+              onChange={(e) => setSeed(Number(e.target.value))}
+              disabled={running}
+            />
+          </label>
+          <label>
+            episode length (s)
+            <input
+              type="number"
+              min={60}
+              max={3600}
+              value={episodeLengthS}
+              onChange={(e) => setEpisodeLengthS(Number(e.target.value))}
+              disabled={running}
+            />
+          </label>
+          <label className="checkbox-label">
+            <input type="checkbox" checked={trace} onChange={(e) => setTrace(e.target.checked)} disabled={running} />
+            record trace + provenance row
+          </label>
+          <p className="control-note">{options.note}</p>
+          <div className="control-buttons">
+            <button onClick={handleStart} disabled={busy || running}>
+              start session
+            </button>
+            <button onClick={handleStop} disabled={busy || !running}>
+              stop session
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="error-text">{error}</p>}
+      {session && (
+        <dl className="session-status">
+          <dt>run_id</dt>
+          <dd>{session.run_id}</dd>
+          <dt>state</dt>
+          <dd className={"state-" + session.state}>{session.state}</dd>
+          <dt>controller / scenario / seed</dt>
+          <dd>
+            {session.controller} / {session.scenario} / {session.seed}
+          </dd>
+          <dt>frames</dt>
+          <dd>{session.frames}</dd>
+          <dt>loop lag (last / max)</dt>
+          <dd>
+            {session.loop_lag_s.last.toFixed(3)}s / {session.loop_lag_s.max.toFixed(3)}s
+          </dd>
+          {session.error && (
+            <>
+              <dt>error</dt>
+              <dd className="error-text">{session.error}</dd>
+            </>
+          )}
+        </dl>
+      )}
+    </div>
+  );
+}

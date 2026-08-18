@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.api.hub import MAX_QUEUE, Hub
@@ -79,6 +80,15 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         title="Smart Traffic Intersection - hub",
         version=SCHEMA_VERSION,
         lifespan=lifespan,
+    )
+    # Single-machine, no-auth deployment (project-rules.md, system-architecture-overview.md
+    # "Deployment topology"): the React dev server runs on its own port (5173) from the FastAPI
+    # hub (8000), so the browser enforces CORS on every REST call unless the hub allows it.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.unity_hub = Hub("unity")
     app.state.dash_hub = Hub("dash")
