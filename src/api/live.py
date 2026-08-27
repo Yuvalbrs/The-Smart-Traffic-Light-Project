@@ -40,6 +40,9 @@ from src.api.wire import dashboard_frame
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_TRACE_DIR = _REPO_ROOT / "data" / "live"
 
+# Same KPI warm-up as `eval_runner --warmup` so a live row is comparable to an eval row.
+_WARMUP_S = 300.0
+
 # The controllers offerable from the API. sel/plain is the project's shipped product; the
 # baselines are what it is judged against. Keys are the wire names clients send.
 CONTROLLERS = (
@@ -67,6 +70,7 @@ class SessionStatus:
     state: str = "starting"  # starting | running | finished | failed | stopped
     sim_time: float = 0.0
     frames: int = 0
+    speed: float = 0.0  # simulated seconds per wall second; 0 = unpaced
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -84,6 +88,7 @@ class SessionStatus:
             "state": self.state,
             "sim_time": self.sim_time,
             "frames": self.frames,
+            "speed": self.speed,
             "error": self.error,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -127,6 +132,11 @@ class LiveSession:
         Episode length; shorter values make a demo loop quickly.
     trace : bool, optional
         Write the JSONL trace + database rows (default ``True``).
+    speed : float, optional
+        Simulated seconds per wall-clock second. ``0`` (the default) runs the episode as fast as
+        the machine allows - right for tests and for filling the replay corpus. ``1.0`` paces it
+        to real time so a human can watch the charts move; ``5.0`` is 5x real time. See
+        :meth:`_pace`.
     """
 
     def __init__(
@@ -139,6 +149,7 @@ class LiveSession:
         dash_hub: Hub,
         episode_length_s: int = 3600,
         trace: bool = True,
+        speed: float = 0.0,
     ) -> None:
         if controller not in CONTROLLERS:
             raise ValueError(
@@ -150,14 +161,23 @@ class LiveSession:
         self.scenario = scenario
         self.seed = seed
         self.episode_length_s = episode_length_s
+        self.speed = max(0.0, float(speed))
         self._unity, self._dash = unity_hub, dash_hub
         self._trace = trace
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._env: Any = None
         self._last_tick = 0.0
+        self._pace_origin: float | None = None
+        self._pace_frame0 = 0
+        self._tripinfo_path: Path | None = None
+        self._counters: dict[str, int] | None = None
         self.status = SessionStatus(
-            run_id=new_run_id(), controller=controller, scenario=scenario, seed=seed
+            run_id=new_run_id(),
+            controller=controller,
+            scenario=scenario,
+            seed=seed,
+            speed=self.speed,
         )
 
     # --- lifecycle ---
@@ -183,16 +203,21 @@ class LiveSession:
     def _on_frame(self, frame: dict[str, Any]) -> None:
         """Called by SUMOEnv once per simulated second, inside the stepping loop.
 
-        Must not block: both hubs hand off to bounded queues and return. Also records loop lag -
-        the wall-clock gap between consecutive simulated seconds - which ``/health`` reports as
-        the honest measure of whether the sim is keeping up with real time.
+        Must never block *on a client*: both hubs hand off to bounded queues and return, so a
+        stalled WebSocket subscriber can only starve itself. It may block on the session's own
+        clock - see :meth:`_pace`.
+
+        Also records loop lag - the wall-clock gap between consecutive simulated seconds - which
+        ``/health`` reports as the honest measure of whether the sim is keeping up. The lag clock
+        is stopped before :meth:`_pace` and restarted after it, so deliberate pacing sleep is
+        excluded: under ``speed=1.0`` loop lag must still read the few milliseconds of real work,
+        not the ~1 s we chose to wait.
         """
         now = time.perf_counter()
         if self._last_tick:
             lag = now - self._last_tick
             self.status.last_loop_lag_s = lag
             self.status.max_loop_lag_s = max(self.status.max_loop_lag_s, lag)
-        self._last_tick = now
 
         self.status.frames += 1
         self.status.sim_time = float(frame.get("sim_time", 0.0))
@@ -221,6 +246,32 @@ class LiveSession:
             )
         except Exception as exc:  # a dashboard hiccup must never kill the simulation
             self.status.error = "dashboard frame failed: " + repr(exc)
+
+        self._pace()
+        self._last_tick = time.perf_counter()
+
+    def _pace(self) -> None:
+        """Throttle the stepping loop to ``speed`` simulated seconds per wall-clock second.
+
+        Without this the episode runs as fast as libsumo can step - measured at ~700x real time
+        on this machine - so a 1 Hz "live" stream arrives in one burst and the dashboard charts
+        snap to their final state instead of moving. Unpaced (``speed=0``) stays the default:
+        tests and corpus-filling runs want the machine's full speed.
+
+        Waits on :attr:`_stop` rather than sleeping, so ``DELETE /sessions/current`` stays
+        responsive while a real-time run is mid-wait. The origin is taken on the first frame,
+        not at thread start, so SUMO's startup cost is not charged to the schedule.
+        """
+        if self.speed <= 0.0:
+            return
+        if self._pace_origin is None:
+            self._pace_origin = time.perf_counter()
+            self._pace_frame0 = self.status.frames
+            return
+        elapsed_sim = self.status.frames - self._pace_frame0
+        delay = (self._pace_origin + elapsed_sim / self.speed) - time.perf_counter()
+        if delay > 0:
+            self._stop.wait(timeout=delay)
 
     def _build(self) -> tuple[Any, Any]:
         """Construct the env + the policy for this session. Returns ``(env, algo)``."""
@@ -270,6 +321,9 @@ class LiveSession:
         if self._trace:
             LIVE_TRACE_DIR.mkdir(parents=True, exist_ok=True)
             trace_path = LIVE_TRACE_DIR / (self.status.run_id + ".jsonl")
+            # SUMO only writes trip-info when asked at start-up, and extract_kpis cannot run
+            # without it - which is why live runs used to persist a KPI-less episode row.
+            self._tripinfo_path = LIVE_TRACE_DIR / (self.status.run_id + ".tripinfo.xml")
             self.status.trace_path = str(trace_path)
 
         env: Any = SUMOEnv(
@@ -278,6 +332,7 @@ class LiveSession:
             sumo_seed=self.seed,
             signal_mode=algo.signal_mode,
             trace_path=trace_path,
+            tripinfo_path=self._tripinfo_path,
             on_frame=self._on_frame,
         )
         if algo.forecaster is not None:
@@ -311,6 +366,9 @@ class LiveSession:
                 self._last_action = action
                 obs, _r, terminated, truncated, info = env.step(action)
                 done = bool(terminated or truncated)
+            # loaded_count is the only source of the insertion backlog (trip-info holds completed
+            # trips only), so the counters must be read before the env is closed.
+            self._counters = info.get("episode")
             self.status.state = "stopped" if self._stop.is_set() else "finished"
         except Exception as exc:  # surface it in /sessions/current rather than dying silently
             self.status.state = "failed"
@@ -329,20 +387,57 @@ class LiveSession:
                 except Exception as exc:  # provenance failure must not mask a good run
                     self.status.error = "persist failed: " + repr(exc)
 
+    def _compute_kpis(self) -> Any | None:
+        """Extract this episode's KPIs, or ``None`` when they would not be meaningful.
+
+        Deliberately returns ``None`` unless the episode ran to its natural end: an operator who
+        hits ``DELETE /sessions/current`` half way through has a truncated trip-info file, and a
+        KPI row computed from it would be a real-looking number that means nothing. The original
+        design skipped KPIs for *every* live run for this reason; the narrower rule keeps that
+        protection while letting a completed demo carry its numbers.
+
+        Uses :func:`src.metrics.kpi_extractor.extract_kpis` - the same one implementation the
+        eval corpus used (``project-rules.md``: one KPI implementation, no drift) - and mirrors
+        ``eval_runner``'s warm-up convention so a live run is comparable to an eval row.
+        """
+        if self.status.state != "finished":
+            return None
+        if self._tripinfo_path is None or not self._tripinfo_path.exists():
+            return None
+        if self.status.trace_path is None:
+            return None
+
+        from src.metrics.kpi_extractor import extract_kpis
+
+        # eval_runner: `warmup = args.warmup if args.warmup < episode_length_s else 0.0`.
+        # Short demo episodes therefore keep every second rather than discarding all of them.
+        episode_length_s = float(self.status.sim_time)
+        warmup_s = _WARMUP_S if _WARMUP_S < episode_length_s else 0.0
+        return extract_kpis(
+            self.status.trace_path,
+            self._tripinfo_path,
+            episode_counters=self._counters,
+            warmup_s=warmup_s,
+            episode_length_s=episode_length_s,
+        )
+
     def _persist(self) -> None:
         """Record this live run in the results DB so it shows up in ``GET /runs``.
 
-        Written with ``mode="live"`` and no KPI row: the confirmatory KPIs require SUMO trip-info
-        (``extract_kpis``), which a stopped-early demo episode need not have. What the row does
-        carry is the full version chain, which is what makes the trace replayable and citable.
+        Written with ``mode="live"`` so it can never be mistaken for evaluation data, and
+        carrying the full version chain, which is what makes the trace replayable and citable.
+        A completed episode also gets its 1:1 KPI row (see :meth:`_compute_kpis`); one that was
+        stopped early gets the episode row alone, with KPI columns left NULL.
         """
         import json
 
         from sqlalchemy.orm import Session
 
         from src.db.engine import create_db_engine, init_db
-        from src.db.models import Episode, ExperimentRun
+        from src.db.models import Episode, EpisodeKpi, ExperimentRun
         from src.provenance.versions import git_sha, sumo_version
+
+        kpis = self._compute_kpis()
 
         db_path = _REPO_ROOT / "data" / "traffic.db"
         engine = create_db_engine(db_path)
@@ -367,16 +462,29 @@ class LiveSession:
             )
             session.add(run)
             session.flush()
-            session.add(
-                Episode(
-                    run_id_fk=run.id,
-                    index_in_run=0,
-                    seed=self.seed,
-                    scenario=self.scenario,
-                    sim_duration=self.status.sim_time,
-                    done_reason=self.status.state,
-                )
+            episode = Episode(
+                run_id_fk=run.id,
+                index_in_run=0,
+                seed=self.seed,
+                scenario=self.scenario,
+                sim_duration=self.status.sim_time,
+                done_reason=self.status.state,
             )
+            if kpis is not None:
+                episode.insertion_backlog_fraction = kpis.insertion_backlog_fraction
+                episode.gridlock_censored = bool(kpis.gridlock_censored)
+                episode.kpi = EpisodeKpi(
+                    avg_waiting_time=kpis.avg_waiting_time,
+                    avg_queue_length=kpis.avg_queue_length,
+                    throughput=kpis.throughput,
+                    num_stops=kpis.num_stops,
+                    wait_p95=kpis.wait_p95,
+                    fairness_std=kpis.fairness_std,
+                    per_movement_max_wait=kpis.per_movement_max_wait,
+                    per_movement_p95_wait=kpis.per_movement_p95_wait,
+                    worst_movement_max_wait=kpis.worst_movement_max_wait,
+                )
+            session.add(episode)
             session.commit()
 
 
@@ -395,7 +503,7 @@ class SessionManager:
 
     def start(
         self, *, controller: str, scenario: str, seed: int, episode_length_s: int = 3600,
-        trace: bool = True,
+        trace: bool = True, speed: float = 0.0,
     ) -> LiveSession:
         """Start a session, or raise :class:`SessionBusyError` if one is already running."""
         with self._lock:
@@ -412,6 +520,7 @@ class SessionManager:
                 dash_hub=self._dash,
                 episode_length_s=episode_length_s,
                 trace=trace,
+                speed=speed,
             )
             self._current = session
             session.start()

@@ -50,6 +50,12 @@ class StartSession(BaseModel):
     seed: int = Field(7000, description="SUMO vehicle seed")
     episode_length_s: int = Field(3600, ge=60, le=3600, description="seconds of simulated time")
     trace: bool = Field(True, description="write the JSONL trace + a provenanced run row")
+    speed: float = Field(
+        0.0,
+        ge=0.0,
+        le=100.0,
+        description="simulated seconds per wall second; 0 = as fast as possible, 1 = real time",
+    )
 
 
 @asynccontextmanager
@@ -146,6 +152,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                 seed=body.seed,
                 episode_length_s=body.episode_length_s,
                 trace=body.trace,
+                speed=body.speed,
             )
         except SessionBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

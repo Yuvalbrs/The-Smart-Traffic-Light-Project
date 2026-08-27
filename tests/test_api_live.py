@@ -24,6 +24,7 @@ class _StubSession:
         self.controller = kwargs.get("controller", "webster")
         self.scenario = kwargs.get("scenario", "SCN-05")
         self.seed = kwargs.get("seed", 7000)
+        self.speed = kwargs.get("speed", 0.0)
         self._alive = False
         self.started = False
         self.stopped = False
@@ -143,3 +144,101 @@ def test_unknown_controller_is_rejected_before_any_simulation() -> None:
             unity_hub=Hub("unity"),
             dash_hub=Hub("dash"),
         )
+
+
+# --- real-time pacing (T-05-02 demo fix) ---------------------------------------------------
+
+
+def _session(**kwargs):
+    """A LiveSession that has not been started - safe to poke at without SUMO."""
+    from src.api.hub import Hub
+    from src.api.live import LiveSession
+
+    kwargs.setdefault("controller", "webster")
+    kwargs.setdefault("scenario", "SCN-04")
+    kwargs.setdefault("seed", 7000)
+    return LiveSession(unity_hub=Hub("unity"), dash_hub=Hub("dash"), **kwargs)
+
+
+def test_unpaced_is_the_default_and_never_sleeps() -> None:
+    """speed=0 must keep the original as-fast-as-possible behaviour for tests and corpus runs."""
+    import time
+
+    session = _session()
+    assert session.speed == 0.0
+
+    session.status.frames = 500
+    started = time.perf_counter()
+    for _ in range(50):
+        session._pace()
+    assert time.perf_counter() - started < 0.05, "unpaced sessions must not throttle"
+
+
+def test_pacing_throttles_to_the_requested_speed() -> None:
+    """At speed=20, ten simulated seconds must take about half a wall-clock second."""
+    import time
+
+    session = _session(speed=20.0)
+    session.status.frames = 1
+    session._pace()  # first frame only takes the origin
+
+    started = time.perf_counter()
+    for frame in range(2, 12):
+        session.status.frames = frame
+        session._pace()
+    elapsed = time.perf_counter() - started
+
+    assert 0.3 < elapsed < 0.9, f"expected ~0.5s of pacing for 10 frames at 20x, got {elapsed:.3f}s"
+
+
+def test_pacing_wakes_immediately_when_the_session_is_stopped() -> None:
+    """DELETE /sessions/current must not block for a whole frame interval mid-wait."""
+    import time
+
+    session = _session(speed=0.5)  # 2 wall-seconds per simulated second
+    session.status.frames = 1
+    session._pace()
+
+    session._stop.set()
+    session.status.frames = 2
+    started = time.perf_counter()
+    session._pace()
+    assert time.perf_counter() - started < 0.5, "a stopped session must abandon the pacing wait"
+
+
+def test_speed_reaches_the_session_manager(client) -> None:
+    """The wire field must actually arrive at LiveSession, not be dropped in the route."""
+    resp = client.post(
+        "/sessions",
+        json={"controller": "webster", "scenario": "SCN-04", "seed": 7000, "speed": 5.0},
+    )
+    assert resp.status_code == 201
+    assert client.app.state.sessions.current.speed == 5.0
+
+
+def test_speed_must_not_be_negative(client) -> None:
+    assert client.post("/sessions", json={"controller": "webster", "speed": -1.0}).status_code == 422
+
+
+# --- live-run KPIs (replay browser fix) ----------------------------------------------------
+
+
+def test_no_kpis_when_the_episode_was_stopped_early(tmp_path) -> None:
+    """A truncated trip-info file would yield real-looking numbers that mean nothing."""
+    session = _session()
+    session.status.state = "stopped"
+    session._tripinfo_path = tmp_path / "t.xml"
+    session._tripinfo_path.write_text("<tripinfos/>", encoding="utf-8")
+    session.status.trace_path = str(tmp_path / "t.jsonl")
+
+    assert session._compute_kpis() is None
+
+
+def test_no_kpis_when_tripinfo_was_never_written(tmp_path) -> None:
+    """trace=False sessions have no trip-info, and extract_kpis cannot run without one."""
+    session = _session(trace=False)
+    session.status.state = "finished"
+    session.status.trace_path = str(tmp_path / "t.jsonl")
+
+    assert session._tripinfo_path is None
+    assert session._compute_kpis() is None

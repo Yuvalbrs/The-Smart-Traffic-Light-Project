@@ -12,6 +12,9 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
   const [seed, setSeed] = useState(7000);
   const [episodeLengthS, setEpisodeLengthS] = useState(600);
   const [trace, setTrace] = useState(true);
+  // Default to real time: unpaced, libsumo steps ~700x faster than the wall clock and the charts
+  // land fully drawn. Demos want to be watchable; set 0 to go as fast as the machine allows.
+  const [speed, setSpeed] = useState(1);
   const [session, setSession] = useState<SessionStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +58,14 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
     setBusy(true);
     setError(null);
     try {
-      const s = await startSession({ controller, scenario, seed, episode_length_s: episodeLengthS, trace });
+      const s = await startSession({
+        controller,
+        scenario,
+        seed,
+        episode_length_s: episodeLengthS,
+        trace,
+        speed,
+      });
       setSession(s);
       onSessionChange(s);
     } catch (e) {
@@ -122,6 +132,19 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
               disabled={running}
             />
           </label>
+          <label>
+            speed (sim s per real s)
+            <select
+              value={speed}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+              disabled={running}
+            >
+              <option value={1}>1x - real time (watchable)</option>
+              <option value={5}>5x</option>
+              <option value={10}>10x</option>
+              <option value={0}>unpaced - as fast as possible</option>
+            </select>
+          </label>
           <label className="checkbox-label">
             <input type="checkbox" checked={trace} onChange={(e) => setTrace(e.target.checked)} disabled={running} />
             record trace + provenance row
@@ -150,6 +173,8 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
           </dd>
           <dt>frames</dt>
           <dd>{session.frames}</dd>
+          <dt>speed</dt>
+          <dd>{session.speed > 0 ? `${session.speed}x real time` : "unpaced"}</dd>
           <dt>loop lag (last / max)</dt>
           <dd>
             {session.loop_lag_s.last.toFixed(3)}s / {session.loop_lag_s.max.toFixed(3)}s

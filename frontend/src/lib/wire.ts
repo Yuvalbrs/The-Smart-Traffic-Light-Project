@@ -55,6 +55,8 @@ export interface StartSessionBody {
   seed: number;
   episode_length_s: number;
   trace: boolean;
+  /** Simulated seconds per wall second. 0 = as fast as the machine allows, 1 = real time. */
+  speed: number;
 }
 
 export type SessionState = "starting" | "running" | "finished" | "failed" | "stopped";
@@ -67,6 +69,7 @@ export interface SessionStatus {
   state: SessionState;
   sim_time: number;
   frames: number;
+  speed: number;
   error: string | null;
   started_at: number;
   finished_at: number | null;
