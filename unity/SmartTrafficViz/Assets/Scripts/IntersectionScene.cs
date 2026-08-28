@@ -266,27 +266,89 @@ namespace SmartTraffic
             Object.Destroy(disc.GetComponent<Collider>());
             Paint(disc, new Color(0.09f, 0.26f, 0.60f));
 
+            // Rotation about local Z is counter-clockwise seen from +Z, so -90 sends the arrow to
+            // local +X and +90 to local -X.
             var angle = turn == 0 ? -90f : turn == 2 ? 90f : 0f;
-            var arrow = new GameObject("Arrow").transform;
-            arrow.SetParent(sign);
-            arrow.localPosition = new Vector3(0f, 0f, -0.14f); // just proud of the disc face
-            arrow.localRotation = Quaternion.Euler(0f, 0f, angle);
-
-            Bar(arrow, "Shaft", new Vector3(0.42f, 1.9f, 0.12f), new Vector3(0f, -0.25f, 0f), 0f);
-            Bar(arrow, "BarbL", new Vector3(0.42f, 1.15f, 0.12f), new Vector3(-0.35f, 0.62f, 0f), 38f);
-            Bar(arrow, "BarbR", new Vector3(0.42f, 1.15f, 0.12f), new Vector3(0.35f, 0.62f, 0f), -38f);
+            var arrow = new GameObject("Arrow");
+            arrow.transform.SetParent(sign);
+            // +Z, NOT -Z: local +Z faces the oncoming driver. Mounted on the far face the arrow is
+            // only visible from behind the sign, where left and right read mirrored.
+            arrow.transform.localPosition = new Vector3(0f, 0f, 0.14f);
+            arrow.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
+            arrow.transform.localScale = Vector3.one * 1.25f;
+            arrow.AddComponent<MeshFilter>().sharedMesh = ArrowMesh;
+            arrow.AddComponent<MeshRenderer>();
+            // Emissive, not just white: the arrow is a vertical face with a horizontal normal, so
+            // the overhead key light barely grazes it and plain white paint renders mid-grey.
+            arrow.GetComponent<Renderer>().sharedMaterial = ArrowMaterial;
         }
 
-        private static void Bar(Transform parent, string name, Vector3 size, Vector3 at, float roll)
+        private static Material _arrowMat;
+
+        private static Material ArrowMaterial
         {
-            var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            bar.name = name;
-            bar.transform.SetParent(parent);
-            bar.transform.localScale = size;
-            bar.transform.localPosition = at;
-            bar.transform.localRotation = Quaternion.Euler(0f, 0f, roll);
-            Object.Destroy(bar.GetComponent<Collider>());
-            Paint(bar, new Color(0.96f, 0.97f, 0.99f));
+            get
+            {
+                if (_arrowMat != null) return _arrowMat;
+                _arrowMat = new Material(LitShader) { color = Color.white };
+                _arrowMat.EnableKeyword("_EMISSION");
+                _arrowMat.SetColor("_EmissionColor", new Color(0.75f, 0.78f, 0.82f));
+                return _arrowMat;
+            }
+        }
+
+        private static Mesh _arrow;
+
+        /// <summary>
+        /// A flat arrow in local XY pointing +Y: shaft quad plus a triangular head.
+        ///
+        /// Built as one mesh rather than assembled from rotated cubes - three boxes at angles
+        /// read as a wrench, not an arrow, because the barbs overshoot the shaft tip instead of
+        /// meeting it. Double-sided with explicit normals so it lights correctly from either side.
+        /// </summary>
+        private static Mesh ArrowMesh
+        {
+            get
+            {
+                if (_arrow != null) return _arrow;
+
+                const float w = 0.30f;   // half shaft width
+                const float hw = 0.78f;  // half head width
+                const float y0 = -1.05f; // shaft base
+                const float y1 = 0.10f;  // shaft top / head base
+                const float y2 = 1.10f;  // tip
+
+                var face = new[]
+                {
+                    new Vector3(-w, y0, 0f), new Vector3(w, y0, 0f),
+                    new Vector3(w, y1, 0f), new Vector3(-w, y1, 0f),
+                    new Vector3(-hw, y1, 0f), new Vector3(hw, y1, 0f), new Vector3(0f, y2, 0f),
+                };
+                var faceTris = new[] { 0, 2, 1, 0, 3, 2, 4, 6, 5 };
+
+                var verts = new Vector3[face.Length * 2];
+                var norms = new Vector3[face.Length * 2];
+                var tris = new int[faceTris.Length * 2];
+                for (var i = 0; i < face.Length; i++)
+                {
+                    verts[i] = face[i];
+                    verts[i + face.Length] = face[i];
+                    norms[i] = Vector3.forward;
+                    norms[i + face.Length] = Vector3.back;
+                }
+                for (var i = 0; i < faceTris.Length; i++) tris[i] = faceTris[i];
+                for (var i = 0; i < faceTris.Length; i += 3)
+                {
+                    // Reversed winding for the back face.
+                    tris[faceTris.Length + i] = faceTris[i] + face.Length;
+                    tris[faceTris.Length + i + 1] = faceTris[i + 2] + face.Length;
+                    tris[faceTris.Length + i + 2] = faceTris[i + 1] + face.Length;
+                }
+
+                _arrow = new Mesh { name = "Arrow", vertices = verts, normals = norms, triangles = tris };
+                _arrow.RecalculateBounds();
+                return _arrow;
+            }
         }
 
         /// <summary>One lamp, sunk into the front face of the housing so it faces oncoming traffic.</summary>

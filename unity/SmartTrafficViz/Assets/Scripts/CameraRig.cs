@@ -169,29 +169,36 @@ namespace SmartTraffic
 
         private void OnGUI()
         {
-            const float w = 84f, h = 24f, pad = 6f;
-            var x = pad;
-            var y = Screen.height - h - pad;
+            const float w = 96f, h = 30f, pad = 8f, barH = 74f;
 
+            var free = Current == Mode.Free;
+            var bar = new Rect(0f, Screen.height - barH, Screen.width, barH);
+            UITheme.Backdrop(bar);
+
+            GUI.Label(new Rect(pad + 4f, bar.y + 6f, 260f, 18f), "CAMERA", UITheme.Heading);
+
+            var hint = free
+                ? "WASD move   Q/E down/up   shift faster   right-drag look   Esc orbit"
+                : "wheel zoom   right-drag orbit   middle-drag pan";
+            GUI.Label(new Rect(pad + 80f, bar.y + 7f, Screen.width - 100f, 18f), hint, UITheme.Hint);
+
+            var x = pad;
+            var y = bar.y + 30f;
             for (var i = 0; i < Presets.Length; i++)
             {
-                var label = Presets[i].Name + "  " + (i + 1);
-                if (GUI.Button(new Rect(x, y, w, h), label)) Use(i);
+                var active = !free && Mathf.Approximately(Yaw, Presets[i].Yaw)
+                                   && Mathf.Approximately(Distance, Presets[i].Distance);
+                var style = active ? UITheme.ButtonOn : UITheme.Button;
+                if (GUI.Button(new Rect(x, y, w, h), Presets[i].Name + "  " + (i + 1), style)) Use(i);
                 x += w + pad;
             }
 
-            var wasFree = Current == Mode.Free;
-            GUI.color = wasFree ? Color.cyan : Color.white;
-            if (GUI.Button(new Rect(x, y, w + 20f, h), wasFree ? "Free  (F) *" : "Free camera  F"))
+            x += 8f;
+            if (GUI.Button(new Rect(x, y, w + 34f, h), free ? "Free camera  ON" : "Free camera  F",
+                    free ? UITheme.ButtonOn : UITheme.Button))
             {
-                SetMode(wasFree ? Mode.Orbit : Mode.Free);
+                SetMode(free ? Mode.Orbit : Mode.Free);
             }
-            GUI.color = Color.white;
-
-            var hint = Current == Mode.Free
-                ? "free: WASD move, Q/E down/up, shift = faster, right-drag look, Esc = orbit"
-                : "orbit: wheel = zoom, right-drag = orbit, middle-drag = pan";
-            GUI.Label(new Rect(pad, y - 20f, 900f, 20f), hint);
         }
     }
 }

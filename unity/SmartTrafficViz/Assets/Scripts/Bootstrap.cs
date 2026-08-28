@@ -14,9 +14,9 @@ namespace SmartTraffic
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Install()
         {
-            if (Object.FindFirstObjectByType<TrafficViz>() != null) return;
+            if (Object.FindFirstObjectByType<AppShell>() != null) return;
             var host = new GameObject("SmartTrafficViz");
-            host.AddComponent<TrafficViz>();
+            host.AddComponent<AppShell>();
             Object.DontDestroyOnLoad(host);
         }
     }

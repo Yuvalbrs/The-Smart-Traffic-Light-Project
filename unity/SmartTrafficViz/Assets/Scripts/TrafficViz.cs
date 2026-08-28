@@ -55,12 +55,14 @@ namespace SmartTraffic
         private Material[] _paints;
         private Material _glass;
         private int _spawned;
+        private GameObject _sceneRoot;
+        private CameraRig _rig;
 
         private void Start()
         {
-            var scene = IntersectionScene.BuildStatic();
-            _heads = IntersectionScene.BuildSignalHeads(scene.transform);
-            Scenery.Build(scene.transform);
+            _sceneRoot = IntersectionScene.BuildStatic();
+            _heads = IntersectionScene.BuildSignalHeads(_sceneRoot.transform);
+            Scenery.Build(_sceneRoot.transform);
             _carRoot = new GameObject("Vehicles").transform;
 
             // A fixed palette shared by sharedMaterial, not one material per car: cars are pooled
@@ -217,7 +219,8 @@ namespace SmartTraffic
 
             // Framing and all camera movement belong to the rig; it sets the transform every
             // LateUpdate, so anything written here would be overwritten on the first frame.
-            if (cam.GetComponent<CameraRig>() == null) cam.gameObject.AddComponent<CameraRig>();
+            _rig = cam.GetComponent<CameraRig>();
+            if (_rig == null) _rig = cam.gameObject.AddComponent<CameraRig>();
         }
 
         private void EnsureLight()
@@ -246,17 +249,26 @@ namespace SmartTraffic
             var simTime = _latest != null ? _latest.SimTime.ToString("F0") + " s" : "-";
             var phase = _latest?.Payload?.Signal != null ? "P" + _latest.Payload.Signal.PhaseIndex : "-";
 
-            GUI.Label(new Rect(12, 8, 900, 22), "ws/unity: " + status + "    " + Url);
-            GUI.Label(new Rect(12, 28, 900, 22),
-                "sim time " + simTime + "    phase " + phase + "    vehicles " + _cars.Count);
-            GUI.Label(new Rect(12, 48, 900, 22),
-                "frames " + (_socket?.Received ?? 0) + "    dropped " + (_socket?.Dropped ?? 0) +
-                "    interval " + _interval.ToString("F2") + " s");
-        }
+            // Offset below the shell's top bar so the two do not overlap.
+            GUI.Label(new Rect(12, 6, 900, 20), "ws/unity: " + status, UITheme.Heading);
+            GUI.Label(new Rect(12, 38, 900, 20),
+                "sim time " + simTime + "     phase " + phase + "     vehicles " + _cars.Count,
+                UITheme.Label);
+            GUI.Label(new Rect(12, 58, 900, 20),
+                "frames " + (_socket?.Received ?? 0) + "     dropped " + (_socket?.Dropped ?? 0) +
+                "     interval " + _interval.ToString("F2") + " s     " + Url,
+                UITheme.Hint);        }
 
         private void OnDestroy()
         {
             _socket?.Dispose();
+
+            // The scene and vehicle roots are separate top-level objects, not children of this
+            // component, so returning to the menu has to remove them explicitly - and the camera
+            // rig with them, or its control bar would keep drawing over the menu.
+            if (_sceneRoot != null) Destroy(_sceneRoot);
+            if (_carRoot != null) Destroy(_carRoot.gameObject);
+            if (_rig != null) Destroy(_rig);
         }
     }
 }
