@@ -14,6 +14,11 @@
 //     arm and the opposing exit occupies the other.
 // For the north approach (heading south) that puts lane 2 - the leftmost, left-turn-only lane -
 // nearest the centreline at x = -1.6, which is where vehicle v120 on lane n_t_2 really was.
+//
+// Each approach carries ONE signal on a mast arm with THREE lamps, one per movement. That is not
+// decoration: left / through / right are independently signalled (a frame really does show
+// M0 red, M1 red, M2 green on the same approach) and those twelve movements are the agent's
+// action space. Collapsing them to one lamp would hide what the controller actually does.
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -27,7 +32,7 @@ namespace SmartTraffic
         public const float LaneWidth = 3.2f;    // SUMO default
         public const float HalfRoad = LanesPerEdge * LaneWidth;        // 9.6 m per direction
         public const float RoadWidth = HalfRoad * 2f;                  // both directions: 19.2 m
-        public const float StopLine = HalfRoad + 1.4f;                 // signal heads just outside
+        public const float StopLine = HalfRoad + 1.2f;                 // just outside the junction
 
         /// <summary>Lane centre offsets from the centreline, index 0 = rightmost = furthest out.</summary>
         private static readonly float[] LaneOffsets = { 8.0f, 4.8f, 1.6f };
@@ -38,9 +43,23 @@ namespace SmartTraffic
             "M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11",
         };
 
-        public static readonly Color Green = new Color(0.20f, 0.80f, 0.35f);
-        public static readonly Color Yellow = new Color(0.95f, 0.80f, 0.20f);
-        public static readonly Color Red = new Color(0.90f, 0.25f, 0.22f);
+        public static readonly Color Green = new Color(0.15f, 0.95f, 0.35f);
+        public static readonly Color Yellow = new Color(1.00f, 0.85f, 0.10f);
+        public static readonly Color Red = new Color(1.00f, 0.20f, 0.18f);
+
+        private static readonly Color Asphalt = new Color(0.20f, 0.21f, 0.23f);
+        private static readonly Color Ground = new Color(0.16f, 0.22f, 0.16f);
+        private static readonly Color MarkingPaint = new Color(0.92f, 0.92f, 0.88f);
+        private static readonly Color Metal = new Color(0.22f, 0.23f, 0.25f);
+
+        private static Shader _shader;
+
+        internal static Shader LitShader =>
+            _shader != null
+                ? _shader
+                // Shader.Find at runtime rather than a serialised material: keeps the project free
+                // of .mat assets and works under whichever pipeline the editor is set to.
+                : _shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
 
         public static Color ColorFor(string name)
         {
@@ -52,7 +71,7 @@ namespace SmartTraffic
             }
         }
 
-        /// <summary>Builds ground, roads and junction. Returns the root object.</summary>
+        /// <summary>Builds ground, roads, markings and signal masts. Returns the root object.</summary>
         public static GameObject BuildStatic()
         {
             var root = new GameObject("Intersection");
@@ -60,89 +79,294 @@ namespace SmartTraffic
             var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
             ground.name = "Ground";
             ground.transform.SetParent(root.transform);
-            ground.transform.localScale = new Vector3(ArmLength / 5f, 1f, ArmLength / 5f);
-            ground.transform.position = new Vector3(0f, -0.05f, 0f);
-            Paint(ground, new Color(0.13f, 0.15f, 0.17f));
+            ground.transform.localScale = new Vector3(ArmLength / 2.5f, 1f, ArmLength / 2.5f);
+            ground.transform.position = new Vector3(0f, -0.06f, 0f);
+            Paint(ground, Ground);
 
-            var asphalt = new Color(0.28f, 0.29f, 0.31f);
-            var junction = MakeSlab("Junction", new Vector3(RoadWidth, 0.1f, RoadWidth), Vector3.zero, asphalt);
-            junction.transform.SetParent(root.transform);
+            Slab(root, "Junction", new Vector3(RoadWidth, 0.1f, RoadWidth), Vector3.zero, Asphalt);
 
-            // One slab per arm, from the junction edge out to the approach endpoint.
             var armLen = ArmLength - HalfRoad;
             var armMid = HalfRoad + armLen / 2f;
-            AddArm(root, "Arm_N", new Vector3(RoadWidth, 0.1f, armLen), new Vector3(0f, 0f, armMid), asphalt);
-            AddArm(root, "Arm_S", new Vector3(RoadWidth, 0.1f, armLen), new Vector3(0f, 0f, -armMid), asphalt);
-            AddArm(root, "Arm_E", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(armMid, 0f, 0f), asphalt);
-            AddArm(root, "Arm_W", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(-armMid, 0f, 0f), asphalt);
+            Slab(root, "Arm_N", new Vector3(RoadWidth, 0.1f, armLen), new Vector3(0f, 0f, armMid), Asphalt);
+            Slab(root, "Arm_S", new Vector3(RoadWidth, 0.1f, armLen), new Vector3(0f, 0f, -armMid), Asphalt);
+            Slab(root, "Arm_E", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(armMid, 0f, 0f), Asphalt);
+            Slab(root, "Arm_W", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(-armMid, 0f, 0f), Asphalt);
 
+            BuildMarkings(root);
             return root;
         }
 
-        /// <summary>
-        /// Creates the twelve signal heads, one per movement, at its own stop line.
-        /// Returns them keyed by movement id so the renderer can recolour in place.
-        /// </summary>
-        public static Dictionary<string, Renderer> BuildSignalHeads(Transform parent)
+        /// <summary>Centre lines, lane dashes and stop bars - the cues that make flow readable.</summary>
+        private static void BuildMarkings(GameObject root)
         {
-            var heads = new Dictionary<string, Renderer>();
+            var markings = new GameObject("Markings").transform;
+            markings.SetParent(root.transform);
+
             for (var approach = 0; approach < 4; approach++)
             {
+                var axis = AxisOf(approach);            // unit vector pointing out along the arm
+                var side = new Vector3(-axis.z, 0f, axis.x); // 90 deg left of it, in-plane
+
+                // Solid centre line: divides the approach from the opposing exit.
+                Marking(markings, "Centre", axis * (HalfRoad + (ArmLength - HalfRoad) / 2f),
+                    0.3f, ArmLength - HalfRoad, axis);
+
+                // Dashed lane separators at +-3.2 and +-6.4 from the centreline, both halves.
+                foreach (var offset in new[] { -6.4f, -3.2f, 3.2f, 6.4f })
+                {
+                    for (var d = HalfRoad + 4f; d < ArmLength - 4f; d += 12f)
+                    {
+                        var pos = axis * (d + 3f) + side * offset;
+                        Marking(markings, "Dash", pos, 0.22f, 6f, axis);
+                    }
+                }
+
+                // Stop bar across this approach's three lanes only (its half of the arm).
+                var stopCentre = axis * StopLine + side * (-HalfRoad / 2f);
+                Marking(markings, "StopBar", stopCentre, HalfRoad, 0.7f, axis);
+            }
+        }
+
+        /// <summary>
+        /// A real three-lamp signal head: red on top, amber in the middle, green at the bottom,
+        /// with only the current aspect lit. Position carries the state as well as colour, which
+        /// is how a driver reads one - and it stays legible when the colour is small on screen.
+        /// </summary>
+        public sealed class SignalHead
+        {
+            public Renderer RedLamp, AmberLamp, GreenLamp;
+            private LampMaterials _mats;
+
+            internal SignalHead(LampMaterials mats) { _mats = mats; }
+
+            /// <summary>Lights the aspect named by the wire ("red" | "yellow" | "green").</summary>
+            public void Set(string aspect)
+            {
+                RedLamp.sharedMaterial = aspect == "red" ? _mats.RedOn : _mats.RedOff;
+                AmberLamp.sharedMaterial = aspect == "yellow" ? _mats.AmberOn : _mats.AmberOff;
+                GreenLamp.sharedMaterial = aspect == "green" ? _mats.GreenOn : _mats.GreenOff;
+            }
+        }
+
+        internal sealed class LampMaterials
+        {
+            public Material RedOn, RedOff, AmberOn, AmberOff, GreenOn, GreenOff;
+
+            public LampMaterials()
+            {
+                RedOn = Lit(Red); RedOff = Dark(Red);
+                AmberOn = Lit(Yellow); AmberOff = Dark(Yellow);
+                GreenOn = Lit(Green); GreenOff = Dark(Green);
+            }
+
+            // Emissive, so a lit aspect still reads as "on" on the shadowed side of the housing
+            // rather than depending on where the key light happens to fall.
+            private static Material Lit(Color c)
+            {
+                var m = new Material(LitShader) { color = c };
+                m.EnableKeyword("_EMISSION");
+                m.SetColor("_EmissionColor", c * 2.2f);
+                return m;
+            }
+
+            private static Material Dark(Color c)
+            {
+                return new Material(LitShader) { color = c * 0.16f };
+            }
+        }
+
+        /// <summary>
+        /// One mast arm per approach - pole at the kerb, beam over the three approach lanes, and
+        /// a three-lamp head hanging above each lane. Returns the heads keyed by movement id.
+        /// </summary>
+        public static Dictionary<string, SignalHead> BuildSignalHeads(Transform parent)
+        {
+            var heads = new Dictionary<string, SignalHead>();
+            var mats = new LampMaterials();
+            var signals = new GameObject("Signals").transform;
+            signals.SetParent(parent);
+
+            const float poleH = 13f;
+            const float beamH = 12f;
+            const float headTop = 10.6f;   // top lamp height
+            const float lampGap = 1.9f;    // vertical spacing between aspects
+
+            for (var approach = 0; approach < 4; approach++)
+            {
+                var axis = AxisOf(approach);
+                var side = new Vector3(-axis.z, 0f, axis.x);
+                // The approach occupies the half to the RIGHT of its travel direction. Travel is
+                // inward (-axis), so that half lies along +side, and the kerb is at +HalfRoad.
+                var baseAt = axis * StopLine + side * (HalfRoad + 1.6f);
+
+                Slab(signals.gameObject, "Pole_" + approach,
+                    new Vector3(0.55f, poleH, 0.55f), baseAt + Vector3.up * (poleH / 2f), Metal)
+                    .transform.SetParent(signals);
+
+                Slab(signals.gameObject, "Beam_" + approach,
+                    Size(axis, 0.4f, HalfRoad + 1.6f),
+                    axis * StopLine + side * (HalfRoad / 2f) + Vector3.up * beamH, Metal)
+                    .transform.SetParent(signals);
+
                 for (var turn = 0; turn < 3; turn++)
                 {
                     // turn 0 = left = leftmost lane = index 2 = nearest the centreline.
-                    var offset = LaneOffsets[2 - turn];
+                    var laneOffset = LaneOffsets[2 - turn];
                     var id = MovementIds[approach * 3 + turn];
-                    var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                    head.name = "Signal_" + id;
-                    head.transform.SetParent(parent);
-                    head.transform.localScale = Vector3.one * 1.8f;
-                    head.transform.position = HeadPosition(approach, offset);
-                    heads[id] = head.GetComponent<Renderer>();
+                    var at = axis * StopLine + side * laneOffset;
+
+                    // Hanger from the beam down to the head.
+                    Slab(signals.gameObject, "Hanger_" + id, new Vector3(0.22f, 1.4f, 0.22f),
+                        at + Vector3.up * (beamH - 0.7f), Metal).transform.SetParent(signals);
+
+                    // The housing. Deliberately oversized - a true 1.2 m head is a couple of
+                    // pixels at the ~280 m camera range, and the aspect is the point of drawing it.
+                    Slab(signals.gameObject, "Housing_" + id,
+                        new Vector3(2.1f, 6.4f, 1.3f), at + Vector3.up * (headTop - lampGap),
+                        new Color(0.12f, 0.13f, 0.14f)).transform.SetParent(signals);
+
+                    var head = new SignalHead(mats)
+                    {
+                        RedLamp = Lamp(signals, "Red_" + id, at, headTop, axis),
+                        AmberLamp = Lamp(signals, "Amber_" + id, at, headTop - lampGap, axis),
+                        GreenLamp = Lamp(signals, "Green_" + id, at, headTop - 2f * lampGap, axis),
+                    };
+                    head.Set("red");
+                    heads[id] = head;
+
+                    BuildSign(signals, id, at + Vector3.up * (headTop + 3.6f), axis, turn);
                 }
             }
             return heads;
         }
 
         /// <summary>
-        /// Where an approach's signal head sits. Each approach occupies the half of its arm that
-        /// is to the right of its own travel direction, which is what decides the sign here.
+        /// The blue direction disc above a head, with an arrow pointing where that movement goes.
+        ///
+        /// Which way is "left" is not cosmetic and is easy to get backwards. The sign faces the
+        /// oncoming driver, so its plane is spanned by world up and <c>Cross(up, axis)</c>. For
+        /// the north approach that in-plane +X is east - and a driver heading south has east on
+        /// their left. So local +X is the driver's LEFT on every approach, and the left-turn arrow
+        /// rotates -90 degrees from vertical, the right-turn arrow +90.
         /// </summary>
-        private static Vector3 HeadPosition(int approach, float laneOffset)
+        private static void BuildSign(Transform parent, string id, Vector3 at, Vector3 axis, int turn)
         {
-            const float h = 3.2f;
+            var sign = new GameObject("Sign_" + id).transform;
+            sign.SetParent(parent);
+            sign.position = at + axis * 0.7f;
+            sign.rotation = Quaternion.LookRotation(axis, Vector3.up);
+
+            var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            disc.name = "Disc";
+            disc.transform.SetParent(sign);
+            disc.transform.localPosition = Vector3.zero;
+            // A cylinder's axis is its local Y; tip it so the flat face points at the driver.
+            disc.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            disc.transform.localScale = new Vector3(3.4f, 0.16f, 3.4f);
+            Object.Destroy(disc.GetComponent<Collider>());
+            Paint(disc, new Color(0.09f, 0.26f, 0.60f));
+
+            var angle = turn == 0 ? -90f : turn == 2 ? 90f : 0f;
+            var arrow = new GameObject("Arrow").transform;
+            arrow.SetParent(sign);
+            arrow.localPosition = new Vector3(0f, 0f, -0.14f); // just proud of the disc face
+            arrow.localRotation = Quaternion.Euler(0f, 0f, angle);
+
+            Bar(arrow, "Shaft", new Vector3(0.42f, 1.9f, 0.12f), new Vector3(0f, -0.25f, 0f), 0f);
+            Bar(arrow, "BarbL", new Vector3(0.42f, 1.15f, 0.12f), new Vector3(-0.35f, 0.62f, 0f), 38f);
+            Bar(arrow, "BarbR", new Vector3(0.42f, 1.15f, 0.12f), new Vector3(0.35f, 0.62f, 0f), -38f);
+        }
+
+        private static void Bar(Transform parent, string name, Vector3 size, Vector3 at, float roll)
+        {
+            var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            bar.name = name;
+            bar.transform.SetParent(parent);
+            bar.transform.localScale = size;
+            bar.transform.localPosition = at;
+            bar.transform.localRotation = Quaternion.Euler(0f, 0f, roll);
+            Object.Destroy(bar.GetComponent<Collider>());
+            Paint(bar, new Color(0.96f, 0.97f, 0.99f));
+        }
+
+        /// <summary>One lamp, sunk into the front face of the housing so it faces oncoming traffic.</summary>
+        private static Renderer Lamp(Transform parent, string name, Vector3 at, float height, Vector3 axis)
+        {
+            var lamp = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            lamp.name = name;
+            lamp.transform.SetParent(parent);
+            lamp.transform.localScale = new Vector3(1.5f, 1.5f, 1.5f);
+            // Nudge towards the approach - the traffic it governs comes from further out.
+            lamp.transform.position = at + axis * 0.75f + Vector3.up * height;
+            Object.Destroy(lamp.GetComponent<Collider>());
+            return lamp.GetComponent<Renderer>();
+        }
+
+        /// <summary>Outward unit vector for approach 0=N, 1=E, 2=S, 3=W.</summary>
+        private static Vector3 AxisOf(int approach)
+        {
             switch (approach)
             {
-                case 0: return new Vector3(-laneOffset, h, StopLine);   // N approach, heading south
-                case 1: return new Vector3(StopLine, h, laneOffset);    // E approach, heading west
-                case 2: return new Vector3(laneOffset, h, -StopLine);   // S approach, heading north
-                default: return new Vector3(-StopLine, h, -laneOffset); // W approach, heading east
+                case 0: return Vector3.forward;   // +z, north
+                case 1: return Vector3.right;     // +x, east
+                case 2: return Vector3.back;      // -z, south
+                default: return Vector3.left;     // -x, west
             }
         }
 
-        private static void AddArm(GameObject root, string name, Vector3 size, Vector3 pos, Color color)
+        /// <summary>A box sized <paramref name="across"/> x <paramref name="along"/> in the axis frame.</summary>
+        private static Vector3 Size(Vector3 axis, float across, float along)
         {
-            var arm = MakeSlab(name, size, pos, color);
-            arm.transform.SetParent(root.transform);
+            return Mathf.Abs(axis.z) > 0.5f
+                ? new Vector3(across, 0.3f, along)
+                : new Vector3(along, 0.3f, across);
         }
 
-        private static GameObject MakeSlab(string name, Vector3 size, Vector3 centre, Color color)
+        private static void Marking(Transform parent, string name, Vector3 centre,
+            float across, float along, Vector3 axis)
+        {
+            var strip = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            strip.name = name;
+            strip.transform.SetParent(parent);
+            strip.transform.localScale = Size(axis, across, along);
+            strip.transform.position = new Vector3(centre.x, 0.07f, centre.z);
+            Object.Destroy(strip.GetComponent<Collider>());
+            Paint(strip, MarkingPaint);
+        }
+
+        private static GameObject Slab(GameObject root, string name, Vector3 size, Vector3 centre, Color color)
         {
             var slab = GameObject.CreatePrimitive(PrimitiveType.Cube);
             slab.name = name;
+            slab.transform.SetParent(root.transform);
             slab.transform.localScale = size;
             slab.transform.position = centre;
+            Object.Destroy(slab.GetComponent<Collider>());
             Paint(slab, color);
             return slab;
         }
 
-        private static void Paint(GameObject go, Color color)
+        private static readonly Dictionary<Color, Material> Palette = new Dictionary<Color, Material>();
+
+        /// <summary>
+        /// Assigns a shared material for this colour, creating it once.
+        ///
+        /// Deliberately <c>sharedMaterial</c>, not <c>material</c>: the latter instantiates a
+        /// private copy per renderer, and the scenery alone is ~1000 objects - that would be a
+        /// thousand materials and a thousand un-batchable draw calls. Nothing recolours an object
+        /// painted this way after the fact; the signal lamps own their materials separately.
+        /// </summary>
+        public static void Paint(GameObject go, Color color)
         {
-            var renderer = go.GetComponent<Renderer>();
-            // Shader.Find at runtime rather than a serialised material: keeps the project free of
-            // .mat assets, and falls back cleanly whichever render pipeline the editor is set to.
-            var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-            renderer.material = new Material(shader) { color = color };
+            // `mat == null` also catches a Material destroyed when Play mode last exited: the
+            // dictionary is static and survives that, so a stale entry would otherwise be handed
+            // out on the next Play whenever domain reload is turned off.
+            if (!Palette.TryGetValue(color, out var mat) || mat == null)
+            {
+                mat = new Material(LitShader) { color = color };
+                Palette[color] = mat;
+            }
+            go.GetComponent<Renderer>().sharedMaterial = mat;
         }
     }
 }

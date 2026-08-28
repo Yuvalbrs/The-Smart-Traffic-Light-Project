@@ -46,22 +46,36 @@ namespace SmartTraffic
         private SumoSocket _socket;
         private readonly Dictionary<string, Car> _cars = new Dictionary<string, Car>();
         private readonly Stack<GameObject> _pool = new Stack<GameObject>();
-        private Dictionary<string, Renderer> _heads;
+        private Dictionary<string, IntersectionScene.SignalHead> _heads;
         private Transform _carRoot;
 
         private float _frameAt;         // Time.time when the latest frame was applied
         private float _interval;        // measured seconds between the last two frames
         private SimFrame _latest;
-        private Material _carMaterial;
+        private Material[] _paints;
+        private Material _glass;
+        private int _spawned;
 
         private void Start()
         {
             var scene = IntersectionScene.BuildStatic();
             _heads = IntersectionScene.BuildSignalHeads(scene.transform);
+            Scenery.Build(scene.transform);
             _carRoot = new GameObject("Vehicles").transform;
 
+            // A fixed palette shared by sharedMaterial, not one material per car: cars are pooled
+            // and recycled, so per-instance materials would leak a new one on every spawn.
             var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-            _carMaterial = new Material(shader) { color = new Color(0.85f, 0.87f, 0.92f) };
+            var palette = new[]
+            {
+                new Color(0.87f, 0.88f, 0.90f), new Color(0.15f, 0.17f, 0.20f),
+                new Color(0.75f, 0.20f, 0.18f), new Color(0.20f, 0.38f, 0.72f),
+                new Color(0.90f, 0.72f, 0.20f), new Color(0.35f, 0.55f, 0.40f),
+                new Color(0.55f, 0.57f, 0.62f),
+            };
+            _paints = new Material[palette.Length];
+            for (var i = 0; i < palette.Length; i++) _paints[i] = new Material(shader) { color = palette[i] };
+            _glass = new Material(shader) { color = new Color(0.10f, 0.14f, 0.18f) };
 
             EnsureCamera();
             EnsureLight();
@@ -104,7 +118,9 @@ namespace SmartTraffic
 
             foreach (var v in frame.Payload.Vehicles)
             {
-                var target = new Vector3(v.X, 0.75f, v.Y); // SUMO (x, y) -> Unity (x, z)
+                // SUMO (x, y) -> Unity (x, z). The y lift puts the body shell just above the road
+                // surface: the body is 0.85 tall and centred on the root.
+                var target = new Vector3(v.X, 0.52f, v.Y);
                 if (!_cars.TryGetValue(v.Id, out var car))
                 {
                     car = new Car { Go = Rent(), From = target, FromYaw = v.Angle };
@@ -139,10 +155,7 @@ namespace SmartTraffic
             {
                 foreach (var kv in colors)
                 {
-                    if (_heads.TryGetValue(kv.Key, out var head))
-                    {
-                        head.material.color = IntersectionScene.ColorFor(kv.Value);
-                    }
+                    if (_heads.TryGetValue(kv.Key, out var head)) head.Set(kv.Value);
                 }
             }
         }
@@ -155,13 +168,29 @@ namespace SmartTraffic
                 reused.SetActive(true);
                 return reused;
             }
-            var car = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            car.name = "Vehicle";
+
+            // A body plus a smaller cabin reads as a car at this camera range, where a single box
+            // reads as a brick. The root carries no mesh so position/rotation stay on one
+            // transform and the parts never need touching again.
+            var car = new GameObject("Vehicle");
             car.transform.SetParent(_carRoot);
-            car.transform.localScale = new Vector3(1.8f, 1.5f, 4.5f); // passenger car, metres
-            Destroy(car.GetComponent<BoxCollider>());                 // nothing here is physical
-            car.GetComponent<Renderer>().sharedMaterial = _carMaterial;
+
+            var paint = _paints[_spawned++ % _paints.Length];
+            AddPart(car.transform, "Body", new Vector3(1.8f, 0.85f, 4.3f), new Vector3(0f, 0f, 0f), paint);
+            AddPart(car.transform, "Cabin", new Vector3(1.55f, 0.7f, 2.0f), new Vector3(0f, 0.72f, -0.25f), paint);
+            AddPart(car.transform, "Glass", new Vector3(1.58f, 0.42f, 0.12f), new Vector3(0f, 0.78f, 0.76f), _glass);
             return car;
+        }
+
+        private static void AddPart(Transform parent, string name, Vector3 size, Vector3 offset, Material mat)
+        {
+            var part = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            part.name = name;
+            part.transform.SetParent(parent);
+            part.transform.localScale = size;
+            part.transform.localPosition = offset;
+            Destroy(part.GetComponent<BoxCollider>()); // nothing here is physical
+            part.GetComponent<Renderer>().sharedMaterial = mat;
         }
 
         private void Release(GameObject car)
@@ -178,22 +207,33 @@ namespace SmartTraffic
                 var go = new GameObject("Main Camera") { tag = "MainCamera" };
                 cam = go.AddComponent<Camera>();
             }
-            cam.transform.position = new Vector3(0f, 95f, -95f);
-            cam.transform.rotation = Quaternion.Euler(45f, 0f, 0f);
-            cam.farClipPlane = 800f;
-            cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.06f, 0.07f, 0.09f);
+            cam.farClipPlane = 1500f;
+            // Skybox when the project has one (it does by default), else a daylight-ish solid so
+            // the generated hills and clouds still sit against sky rather than a black void.
+            cam.clearFlags = RenderSettings.skybox != null
+                ? CameraClearFlags.Skybox
+                : CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.53f, 0.70f, 0.87f);
+
+            // Framing and all camera movement belong to the rig; it sets the transform every
+            // LateUpdate, so anything written here would be overwritten on the first frame.
+            if (cam.GetComponent<CameraRig>() == null) cam.gameObject.AddComponent<CameraRig>();
         }
 
         private void EnsureLight()
         {
+            // Flat ambient on top of the key light: without it the unlit faces of the cars and
+            // signal housings go almost black at this camera angle and the scene reads as mush.
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.42f, 0.45f, 0.50f);
+
             // FindFirstObjectByType, not the FindObjectOfType overload it replaced - the latter is
             // obsolete from Unity 2023 on and warns under Unity 6.
             if (FindFirstObjectByType<Light>() != null) return;
             var go = new GameObject("Directional Light");
             var light = go.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.intensity = 1.1f;
+            light.intensity = 1.25f;
             go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
         }
 
