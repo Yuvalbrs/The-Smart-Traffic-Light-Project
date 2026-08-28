@@ -1,0 +1,42 @@
+# Unity generated - none of this is source.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Editor-regenerated project files
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.booproj
+*.pidb
+*.svd
+*.opendb
+*.VC.db
+
+# Build artefacts
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ProjectSettings is regenerated on first open except for the version pin.
+/ProjectSettings/*
+!/ProjectSettings/ProjectVersion.txt
+
+# Packages/manifest.json is source; the resolved lock is not.
+/Packages/packages-lock.json
+
+# Batch-mode compile logs
+build.log
