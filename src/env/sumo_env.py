@@ -575,10 +575,23 @@ class SUMOEnv(gym.Env):
             # Fail LOUDLY. A collision means a right-of-way/physics modelling error —
             # the class of bug that silently invalidated the entire first campaign.
             self._collisions += colliding
+            def _veh(vid: str) -> str:
+                try:
+                    return (
+                        f"{vid}(route={'>'.join(traci.vehicle.getRoute(vid))} "
+                        f"lane={traci.vehicle.getLaneID(vid)} v={traci.vehicle.getSpeed(vid):.1f})"
+                    )
+                except Exception:  # noqa: BLE001 - vehicle may already be gone
+                    return f"{vid}(gone)"
+
+            detail = "; ".join(
+                f"{_veh(c.collider)} > {_veh(c.victim)} type={c.type} lane={c.lane} pos={c.pos:.1f}"
+                for c in traci.simulation.getCollisions()
+            )
             raise RuntimeError(
                 f"SUMO reported {colliding} colliding vehicle(s) at t={self._sim_time:.0f}s "
-                f"({traci.simulation.getCollidingVehiclesIDList()}). The environment model "
-                "is wrong; investigate — do not suppress (see decisions.md 2026-08-28)."
+                f"[{detail}]. The environment model is wrong; investigate — do not "
+                "suppress (see decisions.md 2026-08-28)."
             )
         if self._tracer is not None or self._on_frame is not None:
             frame = self._build_frame()  # one 1 Hz sim_frame per tick (single-agent)
