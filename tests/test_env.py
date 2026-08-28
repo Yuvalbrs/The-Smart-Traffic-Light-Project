@@ -47,7 +47,8 @@ def test_intersection_pressure_and_green_state() -> None:
         assert p.shape == (N_MOVEMENTS,)
         assert np.all(p == 0)  # empty net -> zero pressure
         g = ix.green_state(0)  # NS through (M1, M7) + free rights
-        assert len(g) == 16 and set(g) <= {"G", "r"} and "G" in g
+        # phase movements are G (major); free rights are g (minor, must yield)
+        assert len(g) == 16 and set(g) <= {"G", "g", "r"} and "G" in g and "g" in g
         # different actions produce different green strings
         assert ix.green_state(0) != ix.green_state(4)
     finally:
@@ -73,13 +74,52 @@ def test_transition_states_and_barrier_logic() -> None:
         traci.simulationStep()
         assert "y" in traci.trafficlight.getRedYellowGreenState("C")
 
-        # all-red: no yellow, controlled links red, free rights still green
+        # all-red: no yellow, controlled links red, free rights permitted (g), never major (G)
         all_red = ix.all_red_state()
-        assert "y" not in all_red and "G" in all_red  # only free rights are G
+        assert "y" not in all_red and "G" not in all_red and "g" in all_red
         traci.trafficlight.setRedYellowGreenState("C", all_red)
         traci.simulationStep()
         live = traci.trafficlight.getRedYellowGreenState("C")
-        assert "y" not in live and "G" in live
+        assert "y" not in live and "G" not in live and "g" in live
+    finally:
+        traci.close()
+
+
+def test_free_right_turns_are_always_green_minor() -> None:
+    """Regression: the gridlock artefact (decisions.md 2026-08-28).
+
+    Two invariants, each of which was violated in the first campaign:
+
+    1. The free right turns (M2, M5, M8, M11) are green in EVERY phase but must
+       be 'g' (green minor - yields), never 'G' (green major - right of way),
+       or SUMO drives them straight through conflicting traffic.
+    2. The free set is ONLY the four dir='r' links {0, 4, 8, 12}. The shared
+       rightmost lane's THROUGH links {1, 5, 9, 13} belong to the through
+       movements and must follow their phase - binding them to the free rights
+       made through-on-red permanently permitted.
+
+    Together: 11 junction collisions and 4/5 gridlocked SCN-05 episodes were
+    traced to these (decisions.md 2026-08-28).
+    """
+    free = {0, 4, 8, 12}  # M2, M5, M8, M11 per link_index_binding.yaml
+    shared_through = {1, 5, 9, 13}  # lane-0 through links: controlled, never free
+    traci.start(["sumo", "-n", "config/network/intersection.net.xml", "--no-step-log", "true"])
+    try:
+        ix = Intersection.from_traci(traci, "C")
+        states = [ix.green_state(a) for a in range(8)]
+        states += [ix.yellow_state(p, n) for p in range(8) for n in range(8) if p != n]
+        states.append(ix.all_red_state())
+        for s in states:
+            got_g = {i for i, c in enumerate(s) if c == "g"}
+            assert got_g == free, f"'g' at {sorted(got_g)}, expected exactly {sorted(free)}: {s}"
+            assert not any(s[i] == "G" for i in free), f"free link is green-major: {s}"
+        # the shared-lane through link moves with its middle-lane sibling, never alone
+        for a in range(8):
+            s = ix.green_state(a)
+            for shared, middle in ((1, 2), (5, 6), (9, 10), (13, 14)):
+                assert s[shared] == s[middle], f"action {a}: split through pair: {s}"
+        # all-red really is all red apart from the free rights
+        assert {c for c in ix.all_red_state()} == {"g", "r"}
     finally:
         traci.close()
 

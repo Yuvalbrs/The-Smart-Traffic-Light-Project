@@ -254,12 +254,23 @@ class Intersection:
     def green_state(self, action: int) -> str:
         """Return the SUMO RYG string for ``action``'s green phase.
 
-        A link is ``G`` if it belongs to one of the action's green movements or to
-        a free (always-permitted) right turn; otherwise ``r``.
+        A link in one of the action's green movements is ``G`` - green *major*, holding right of
+        way. A free (always-permitted) right turn is ``g`` - green *minor*, permitted only when
+        the way is clear.
+
+        That distinction is load-bearing, not cosmetic. The four free rights are green in EVERY
+        phase, so marking them ``G`` gave them priority over the movements they cross, and SUMO
+        drove them straight through conflicting traffic. Measured on SCN-02 seed 7000: 11 junction
+        collisions with ``G``, 0 with ``g``. On SCN-05 across the five held-out eval seeds it was
+        the difference between plain DQN gridlocking 4/5 episodes and 0/5 (see decisions.md
+        2026-08-28). A permitted right turn yields; ``g`` is how SUMO says so.
         """
         self._check_action(action)
-        green = self._links_for(self._phase_green[action]) | self._free_links
-        return "".join("G" if i in green else "r" for i in range(self._n_links))
+        green = self._links_for(self._phase_green[action])
+        return "".join(
+            "G" if i in green else "g" if i in self._free_links else "r"
+            for i in range(self._n_links)
+        )
 
     def is_barrier_crossing(self, prev_action: int, next_action: int) -> bool:
         """True if switching ``prev_action -> next_action`` crosses the NEMA barrier.
@@ -284,7 +295,7 @@ class Intersection:
         chars = []
         for i in range(self._n_links):
             if i in self._free_links:
-                chars.append("G")
+                chars.append("g")  # permitted, must yield - see green_state
             elif i in prev_green and i not in next_green:
                 chars.append("y")
             elif i in prev_green:
@@ -294,8 +305,8 @@ class Intersection:
         return "".join(chars)
 
     def all_red_state(self) -> str:
-        """RYG string for the all-red clearance tick (free rights stay green)."""
-        return "".join("G" if i in self._free_links else "r" for i in range(self._n_links))
+        """RYG string for the all-red clearance tick (free rights stay permitted, yielding)."""
+        return "".join("g" if i in self._free_links else "r" for i in range(self._n_links))
 
     def _check_action(self, action: int) -> None:
         if not 0 <= action < N_PHASES:
