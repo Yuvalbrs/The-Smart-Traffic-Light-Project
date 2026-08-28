@@ -273,7 +273,10 @@ namespace SmartTraffic
             arrow.transform.SetParent(sign);
             // +Z, NOT -Z: local +Z faces the oncoming driver. Mounted on the far face the arrow is
             // only visible from behind the sign, where left and right read mirrored.
-            arrow.transform.localPosition = new Vector3(0f, 0f, 0.14f);
+            // A Unity cylinder is 2 units tall, so localScale.y = 0.16 puts the disc's faces at
+            // local z = +-0.16. At +0.14 the arrow sat INSIDE the disc and z-fought with it,
+            // which renders as a blue-and-white mottle rather than a white arrow. Clear the face.
+            arrow.transform.localPosition = new Vector3(0f, 0f, 0.30f);
             arrow.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
             arrow.transform.localScale = Vector3.one * 1.25f;
             arrow.AddComponent<MeshFilter>().sharedMesh = ArrowMesh;

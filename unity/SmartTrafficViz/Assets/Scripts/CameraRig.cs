@@ -175,14 +175,15 @@ namespace SmartTraffic
             var bar = new Rect(0f, Screen.height - barH, Screen.width, barH);
             UITheme.Backdrop(bar);
 
-            GUI.Label(new Rect(pad + 4f, bar.y + 6f, 260f, 18f), "CAMERA", UITheme.Heading);
+            GUI.Label(new Rect(pad + 6f, bar.y + 5f, 120f, 18f), "CAMERA", UITheme.Heading);
 
             var hint = free
                 ? "WASD move   Q/E down/up   shift faster   right-drag look   Esc orbit"
                 : "wheel zoom   right-drag orbit   middle-drag pan";
-            GUI.Label(new Rect(pad + 80f, bar.y + 7f, Screen.width - 100f, 18f), hint, UITheme.Hint);
+            GUI.Label(new Rect(pad + 90f, bar.y + 6f, Screen.width - pad - 100f, 18f),
+                hint, UITheme.Hint);
 
-            var x = pad;
+            var x = pad + 6f;
             var y = bar.y + 30f;
             for (var i = 0; i < Presets.Length; i++)
             {

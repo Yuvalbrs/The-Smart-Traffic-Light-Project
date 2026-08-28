@@ -23,19 +23,43 @@ namespace SmartTraffic
 
         private TrafficViz _viz;
         private Camera _menuCam;
+        private SessionControl _session;
+        private RunConfig _cfg = RunConfig.Default;
+        private bool _overlay;      // run-setup panel open on top of the live view
+        private float _nextPoll;
 
         private void Start()
         {
             EnsureMenuCamera();
+            _session = new SessionControl(HubUrl);
+            _session.Refresh();
         }
 
         private void Update()
         {
-            // Escape backs out one level, from anywhere.
-            if (Input.GetKeyDown(KeyCode.Escape) && Current != Screen.Menu && !InFreeCamera())
+            // Session status drives the picker's readout; once a second is plenty for a 1 Hz feed.
+            if (Time.unscaledTime >= _nextPoll)
             {
-                Go(Screen.Menu);
+                _nextPoll = Time.unscaledTime + 1f;
+                _session?.Refresh();
             }
+
+            if (Current == Screen.Live && Input.GetKeyDown(KeyCode.Tab)) _overlay = !_overlay;
+
+            // Escape backs out one level: first close the overlay, then leave the screen.
+            if (Input.GetKeyDown(KeyCode.Escape) && !InFreeCamera())
+            {
+                if (_overlay) _overlay = false;
+                else if (Current != Screen.Menu) Go(Screen.Menu);
+            }
+        }
+
+        /// <summary>Starts (or switches to) the chosen scene + controller and shows it.</summary>
+        private void RunAndWatch()
+        {
+            _session.Switch(_cfg);
+            _overlay = false;
+            if (Current != Screen.Live) Go(Screen.Live);
         }
 
         private bool InFreeCamera()
@@ -114,7 +138,7 @@ namespace SmartTraffic
             }
             y += rowH + gap;
 
-            if (GUI.Button(new Rect(bx, y, bw, rowH), "Run setup  (coming next)", UITheme.Button))
+            if (GUI.Button(new Rect(bx, y, bw, rowH), "Choose scene + controller", UITheme.Button))
             {
                 Go(Screen.Controls);
             }
@@ -131,16 +155,17 @@ namespace SmartTraffic
 
         private void DrawControls()
         {
-            var box = Sheet(560f, 260f, "Run setup");
-            var y = box.y + 74f;
-            GUI.Label(new Rect(box.x + 24f, y, box.width - 48f, 130f),
-                "Not built yet. This screen will start an episode from inside Unity - controller, " +
-                "scenario, seed, episode length and playback speed - by POSTing to /sessions on " +
-                "the hub, the same endpoint the React dashboard uses.\n\n" +
-                "Until then, start episodes from the dashboard at localhost:5173 or with curl; " +
-                "this viewer picks up whatever session is running.",
-                Wrapped(UITheme.Label));
-            BackButton(box);
+            var w = RunSetupUI.PanelWidth;
+            var h = RunSetupUI.PanelHeight;
+            var box = new Rect((UnityEngine.Screen.width - w) / 2f,
+                (UnityEngine.Screen.height - h) / 2f - 16f, w, h);
+
+            if (RunSetupUI.Draw(box, ref _cfg, _session, showStop: true)) RunAndWatch();
+
+            if (GUI.Button(new Rect(box.x, box.yMax + 8f, 130f, 30f), "Back  Esc", UITheme.Button))
+            {
+                Go(Screen.Menu);
+            }
         }
 
         private void DrawAbout()
@@ -159,15 +184,36 @@ namespace SmartTraffic
             BackButton(box);
         }
 
+        /// <summary>Height of the live-view top bar. TrafficViz lays its HUD out below this.</summary>
+        public const float TopBarHeight = 34f;
+
         /// <summary>The thin bar shown while the live view is up.</summary>
         private void DrawLiveBar()
         {
             var w = UnityEngine.Screen.width;
-            UITheme.Backdrop(new Rect(0f, 0f, w, 30f));
-            if (GUI.Button(new Rect(w - 108f, 4f, 100f, 22f), "Menu  Esc", UITheme.Button))
+            UITheme.Backdrop(new Rect(0f, 0f, w, TopBarHeight));
+            GUI.Label(new Rect(14f, 7f, 460f, 20f),
+                "SMART TRAFFIC   -   " + _cfg.Scenario + "  /  " + _cfg.Controller, UITheme.Heading);
+
+            if (GUI.Button(new Rect(w - 250f, 4f, 128f, 26f),
+                    _overlay ? "Close  Tab" : "Change scene  Tab",
+                    _overlay ? UITheme.ButtonOn : UITheme.Button))
+            {
+                _overlay = !_overlay;
+            }
+            if (GUI.Button(new Rect(w - 116f, 4f, 104f, 26f), "Menu  Esc", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
+
+            if (!_overlay) return;
+
+            // Switching without leaving the 3-D view is the point: Webster then DQN on the same
+            // scene and seed, back to back, is the comparison the whole project rests on.
+            var pw = RunSetupUI.PanelWidth;
+            var ph = RunSetupUI.PanelHeight;
+            var box = new Rect(w - pw - 16f, TopBarHeight + 10f, pw, ph);
+            if (RunSetupUI.Draw(box, ref _cfg, _session, showStop: true)) RunAndWatch();
         }
 
         private Rect Sheet(float w, float h, string title)

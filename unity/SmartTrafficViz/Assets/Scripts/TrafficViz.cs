@@ -249,15 +249,25 @@ namespace SmartTraffic
             var simTime = _latest != null ? _latest.SimTime.ToString("F0") + " s" : "-";
             var phase = _latest?.Payload?.Signal != null ? "P" + _latest.Payload.Signal.PhaseIndex : "-";
 
-            // Offset below the shell's top bar so the two do not overlap.
-            GUI.Label(new Rect(12, 6, 900, 20), "ws/unity: " + status, UITheme.Heading);
-            GUI.Label(new Rect(12, 38, 900, 20),
-                "sim time " + simTime + "     phase " + phase + "     vehicles " + _cars.Count,
+            // One panel with its own backdrop, laid out from a single origin below the shell's
+            // top bar. The previous version scattered labels at hard-coded y values that
+            // overlapped the bar and each other.
+            const float top = AppShell.TopBarHeight + 8f;
+            const float pad = 12f, line = 20f;
+            var panel = new Rect(8f, top, 430f, line * 3f + 16f);
+            UITheme.Backdrop(panel);
+
+            var y = panel.y + 8f;
+            GUI.Label(new Rect(panel.x + pad, y, panel.width - pad * 2f, line),
+                "ws/unity: " + status, UITheme.Heading);
+            y += line;
+            GUI.Label(new Rect(panel.x + pad, y, panel.width - pad * 2f, line),
+                "sim " + simTime + "     phase " + phase + "     vehicles " + _cars.Count,
                 UITheme.Label);
-            GUI.Label(new Rect(12, 58, 900, 20),
-                "frames " + (_socket?.Received ?? 0) + "     dropped " + (_socket?.Dropped ?? 0) +
-                "     interval " + _interval.ToString("F2") + " s     " + Url,
-                UITheme.Hint);        }
+            y += line;
+            GUI.Label(new Rect(panel.x + pad, y, panel.width - pad * 2f, line),
+                "frames " + (_socket?.Received ?? 0) + "   dropped " + (_socket?.Dropped ?? 0) +
+                "   interval " + _interval.ToString("F2") + " s", UITheme.Hint);        }
 
         private void OnDestroy()
         {
