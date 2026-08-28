@@ -58,7 +58,9 @@ _RUNS_DIR = _REPO_ROOT / "runs"
 _OUT_DIR = _REPO_ROOT / "data" / "eval"
 _DEFAULT_DB = _REPO_ROOT / "data" / "traffic.db"
 _OFFICIAL_LSTM = (
-    _REPO_ROOT / "checkpoints" / "lstm" / "lstm__data-8eb28eecdefb__lstm-df67afd839d4.pt"
+    # retrained on post-gridlock-fix data, SS@60=0.081 SHIP_WITH_CAVEAT
+    # (decisions.md 2026-08-28); must match train_matrix._OFFICIAL_LSTM
+    _REPO_ROOT / "checkpoints" / "lstm" / "lstm__data-aa6ef4458cda__lstm-f70dca8c6ff1.pt"
 )
 TRAIN_SEEDS = (42, 123, 2024)
 DQN_VARIANTS = ("plain", "hybrid", "random-lstm")

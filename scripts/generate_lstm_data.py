@@ -115,7 +115,9 @@ def main() -> None:
     scenarios = (
         [load_scenario(SCENARIO_DIR / f"scn_{args.scenario.split('-')[1]}.yaml")]
         if args.scenario
-        else load_all()
+        # arterial scenarios need one webster plan per junction; the forecaster's
+        # training corpus is single-intersection only (same guard as the tests)
+        else [s for s in load_all() if not s.is_arterial]
     )
 
     cfg_hash = _scenario_configs_hash()

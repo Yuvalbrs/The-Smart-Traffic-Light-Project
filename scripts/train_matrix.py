@@ -39,7 +39,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
 _OFFICIAL_LSTM = (
     _REPO_ROOT / "checkpoints" / "lstm"
-    / "lstm__data-8eb28eecdefb__lstm-df67afd839d4.pt"  # official ckpt (hot.md / ADR-006)
+    # official ckpt (ADR-006); retrained on post-gridlock-fix data, SS@60=0.081
+    # SHIP_WITH_CAVEAT (decisions.md 2026-08-28)
+    / "lstm__data-aa6ef4458cda__lstm-f70dca8c6ff1.pt"
 )
 SEEDS = (42, 123, 2024)
 VARIANTS = ("plain", "hybrid", "random-lstm")
