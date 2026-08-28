@@ -35,14 +35,17 @@ def test_build_actuated_add_structure(tmp_path) -> None:
     root = ET.parse(out).getroot()
 
     detectors = root.findall("inductionLoop")
-    assert len(detectors) == 8  # one per controlled incoming lane (free rights excluded)
+    # one per controlled incoming lane: 4 left + 4 middle-through + 4 shared
+    # right/through lanes (the shared lane carries a CONTROLLED through link,
+    # so the actuated logic detects it; see decisions.md 2026-08-28)
+    assert len(detectors) == 12
 
     tl = root.find("tlLogic")
     assert tl.get("type") == "actuated"
     assert any(p.get("key") == "max-gap" and p.get("value") == "3.0" for p in tl.findall("param"))
     # every detector is bound to its lane (param key = lane id)
     lane_params = {p.get("key"): p.get("value") for p in tl.findall("param") if p.get("key") != "max-gap"}
-    assert len(lane_params) == 8
+    assert len(lane_params) == 12
 
     phases = tl.findall("phase")
     greens = [p for p in phases if p.get("minDur") == "10"]

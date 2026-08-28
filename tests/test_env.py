@@ -88,13 +88,21 @@ def test_transition_states_and_barrier_logic() -> None:
 def test_free_right_turns_are_always_green_minor() -> None:
     """Regression: the gridlock artefact (decisions.md 2026-08-28).
 
-    The four free right turns (M2, M5, M8, M11) are green in EVERY phase. They
-    must be 'g' (green minor - yields) and never 'G' (green major - right of
-    way) in every state the controller can emit, or SUMO drives them straight
-    through conflicting traffic: 11 junction collisions and 4/5 gridlocked
-    SCN-05 episodes were traced to exactly this one character.
+    Two invariants, each of which was violated in the first campaign:
+
+    1. The free right turns (M2, M5, M8, M11) are green in EVERY phase but must
+       be 'g' (green minor - yields), never 'G' (green major - right of way),
+       or SUMO drives them straight through conflicting traffic.
+    2. The free set is ONLY the four dir='r' links {0, 4, 8, 12}. The shared
+       rightmost lane's THROUGH links {1, 5, 9, 13} belong to the through
+       movements and must follow their phase - binding them to the free rights
+       made through-on-red permanently permitted.
+
+    Together: 11 junction collisions and 4/5 gridlocked SCN-05 episodes were
+    traced to these (decisions.md 2026-08-28).
     """
-    free = {0, 1, 4, 5, 8, 9, 12, 13}  # M2, M5, M8, M11 per link_index_binding.yaml
+    free = {0, 4, 8, 12}  # M2, M5, M8, M11 per link_index_binding.yaml
+    shared_through = {1, 5, 9, 13}  # lane-0 through links: controlled, never free
     traci.start(["sumo", "-n", "config/network/intersection.net.xml", "--no-step-log", "true"])
     try:
         ix = Intersection.from_traci(traci, "C")
@@ -105,6 +113,13 @@ def test_free_right_turns_are_always_green_minor() -> None:
             got_g = {i for i, c in enumerate(s) if c == "g"}
             assert got_g == free, f"'g' at {sorted(got_g)}, expected exactly {sorted(free)}: {s}"
             assert not any(s[i] == "G" for i in free), f"free link is green-major: {s}"
+        # the shared-lane through link moves with its middle-lane sibling, never alone
+        for a in range(8):
+            s = ix.green_state(a)
+            for shared, middle in ((1, 2), (5, 6), (9, 10), (13, 14)):
+                assert s[shared] == s[middle], f"action {a}: split through pair: {s}"
+        # all-red really is all red apart from the free rights
+        assert {c for c in ix.all_red_state()} == {"g", "r"}
     finally:
         traci.close()
 

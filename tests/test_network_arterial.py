@@ -131,7 +131,8 @@ def test_both_intersections_resolve_and_coexist(binding: dict) -> None:
             assert ix.pressures(traci).shape == (N_MOVEMENTS,)
         # coupling shows up in the lanes: C1's E-approach lanes live on c2_c1,
         # which is exactly where C2's westbound movements discharge to.
-        assert ix1._in_lanes["M4"] == ["c2_c1_1"]  # E through into C1
-        assert ix2._out_lanes["M4"] == ["c2_c1_1"]  # E through out of C2 (westbound)
+        # E through = shared-lane link + middle-lane link (decisions.md 2026-08-28)
+        assert ix1._in_lanes["M4"] == ["c2_c1_0", "c2_c1_1"]  # E through into C1
+        assert ix2._out_lanes["M4"] == ["c2_c1_0", "c2_c1_1"]  # E through out of C2 (westbound)
     finally:
         traci.close()

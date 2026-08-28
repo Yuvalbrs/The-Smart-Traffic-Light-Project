@@ -224,6 +224,7 @@ class SUMOEnv(gym.Env):
         self._loaded = 0
         self._departed = 0
         self._arrived = 0
+        self._collisions = 0  # junction/rear-end collisions; must stay 0 (see _tick)
 
     # --- SUMO command ---
 
@@ -239,6 +240,12 @@ class SUMOEnv(gym.Env):
             "--threads", "1",
             "--no-step-log", "true",
             "--no-warnings", "true",
+            # SUMO does NOT check collisions inside junctions by default; that silence hid
+            # the free-right-turn priority defect through 291 tests and a full campaign
+            # (decisions.md 2026-08-28). "warn" keeps physics untouched — the default
+            # "teleport" would silently remove colliding vehicles and alter traffic.
+            "--collision.check-junctions", "true",
+            "--collision.action", "warn",
         ]
         if self._additional_file is not None:  # actuated program + detectors
             args += ["-a", str(self._additional_file)]
@@ -313,7 +320,7 @@ class SUMOEnv(gym.Env):
             self._time_in_phase[tls_id] = 0.0
             self._trace_phase[tls_id] = 0
         self._sim_time = 0.0
-        self._loaded = self._departed = self._arrived = 0
+        self._loaded = self._departed = self._arrived = self._collisions = 0
 
         if self._signal_mode == "actuated":
             # hand the lights to SUMO's actuated program; we never command them.
@@ -563,6 +570,16 @@ class SUMOEnv(gym.Env):
         self._loaded += traci.simulation.getLoadedNumber()
         self._departed += traci.simulation.getDepartedNumber()
         self._arrived += traci.simulation.getArrivedNumber()
+        colliding = traci.simulation.getCollidingVehiclesNumber()
+        if colliding:
+            # Fail LOUDLY. A collision means a right-of-way/physics modelling error —
+            # the class of bug that silently invalidated the entire first campaign.
+            self._collisions += colliding
+            raise RuntimeError(
+                f"SUMO reported {colliding} colliding vehicle(s) at t={self._sim_time:.0f}s "
+                f"({traci.simulation.getCollidingVehiclesIDList()}). The environment model "
+                "is wrong; investigate — do not suppress (see decisions.md 2026-08-28)."
+            )
         if self._tracer is not None or self._on_frame is not None:
             frame = self._build_frame()  # one 1 Hz sim_frame per tick (single-agent)
             if self._tracer is not None:
@@ -627,5 +644,6 @@ class SUMOEnv(gym.Env):
                 "departed_count": self._departed,
                 "arrived_count": self._arrived,
                 "insertion_backlog_fraction": backlog,
+                "collision_count": self._collisions,  # 0 unless the RuntimeError was caught
             }
         return info

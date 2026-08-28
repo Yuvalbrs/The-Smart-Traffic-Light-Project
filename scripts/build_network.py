@@ -248,30 +248,59 @@ def assert_wiring(
 
     for mid, spec in movements.items():
         approach, turn, controlled = spec["approach"], spec["turn"], spec["controlled"]
-        in_lane = f"{in_edge[approach]}_{LANE_FOR_TURN[turn]}"
+        edge_prefix = f"{in_edge[approach]}_"
+        want_out = out_edge[GEOMETRY[(approach, turn)]]
 
-        if controlled:
-            # Exactly one link: this lane -> the turn's outgoing edge.
-            want_out = out_edge[GEOMETRY[(approach, turn)]]
-            hits = [i for (i, lane, out) in links if lane == in_lane and out == want_out]
-            if len(hits) != 1:
+        # A movement owns EVERY link from its approach edge to its geometric exit,
+        # regardless of which lane carries it. The shared rightmost lane emits TWO
+        # links (right + through); its through link belongs to the THROUGH movement.
+        # Binding it to the free right made through-on-red permanently permitted for
+        # the shared lane in every phase - the deeper half of the gridlock artefact
+        # (decisions.md 2026-08-28).
+        hits = sorted(
+            i for (i, lane, out) in links if lane.startswith(edge_prefix) and out == want_out
+        )
+        binding[mid] = hits
+
+        if turn in ("left", "right"):
+            # exactly one link, from the turn's designated lane
+            want_lane = f"{in_edge[approach]}_{LANE_FOR_TURN[turn]}"
+            if len(hits) != 1 or not any(
+                lane == want_lane for (i, lane, _o) in links if i in hits
+            ):
                 errors.append(
                     f"{mid} ({approach} {turn}): expected exactly 1 link "
-                    f"{in_lane}->{want_out}, found {len(hits)} {hits}"
+                    f"{want_lane}->{want_out}, found {hits}"
                 )
-            binding[mid] = hits
-        else:
-            # Free rightmost lane: must carry BOTH its through and its right link.
-            want_through = out_edge[GEOMETRY[(approach, "through")]]
-            want_right = out_edge[GEOMETRY[(approach, "right")]]
-            hits = sorted(i for (i, lane, out) in links if lane == in_lane)
-            outs = {out for (_i, lane, out) in links if lane == in_lane}
-            if not {want_through, want_right} <= outs:
+        else:  # through: the dedicated middle lane, plus the shared rightmost lane
+            lanes = {lane for (i, lane, _o) in links if i in hits}
+            want_lanes = {
+                f"{in_edge[approach]}_{LANE_FOR_TURN['through']}",
+                f"{in_edge[approach]}_{LANE_FOR_TURN['right']}",
+            }
+            if lanes != want_lanes:
                 errors.append(
-                    f"{mid} ({approach} {turn}, free): lane {in_lane} should reach "
-                    f"{{{want_through}, {want_right}}}, reaches {outs}"
+                    f"{mid} ({approach} {turn}): expected links from {sorted(want_lanes)} "
+                    f"->{want_out}, found lanes {sorted(lanes)} (links {hits})"
                 )
-            binding[mid] = hits
+        if not controlled:
+            # lane-allocation check: the shared rightmost lane must reach BOTH exits
+            shared = f"{in_edge[approach]}_{LANE_FOR_TURN['right']}"
+            outs = {out for (_i, lane, out) in links if lane == shared}
+            want_through = out_edge[GEOMETRY[(approach, "through")]]
+            if not {want_through, want_out} <= outs:
+                errors.append(
+                    f"{mid} ({approach} {turn}, free): lane {shared} should reach "
+                    f"{{{want_through}, {want_out}}}, reaches {outs}"
+                )
+
+    # The 12 movements must partition the TLS's links: every link claimed once.
+    claimed = sorted(i for idxs in binding.values() for i in idxs)
+    all_links = sorted({i for (i, _l, _o) in links})
+    if claimed != all_links:
+        errors.append(
+            f"binding does not partition the links: claimed {claimed}, net has {all_links}"
+        )
 
     # Every incoming lane must exist (12 movements -> 12 distinct incoming lanes).
     seen_lanes = {lane for (_i, lane, _o) in links}

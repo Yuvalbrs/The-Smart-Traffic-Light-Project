@@ -63,6 +63,12 @@ def test_wiring_conforms_to_movements_spec() -> None:
     movements = yaml.safe_load(_VAULT_MOVEMENTS.read_text(encoding="utf-8"))["movements"]
     binding = assert_wiring(movements, observed_links())
     assert len(binding) == 12
-    assert binding["M0"] == [3]      # N left
-    assert binding["M7"] == [10]     # S through
-    assert binding["M2"] == [0, 1]   # N right lane (free, through + right)
+    assert binding["M0"] == [3]      # N left (dedicated leftmost lane)
+    assert binding["M7"] == [9, 10]  # S through: shared-lane link + middle-lane link
+    assert binding["M2"] == [0]      # N right: ONLY the dir='r' link is free.
+    # The shared rightmost lane's THROUGH link (1) belongs to M1, not the free
+    # right - binding it to M2 kept it green in every phase (through-on-red),
+    # the deeper half of the gridlock artefact (decisions.md 2026-08-28).
+    assert binding["M1"] == [1, 2]   # N through
+    # the 12 movements partition all 16 links
+    assert sorted(i for idxs in binding.values() for i in idxs) == list(range(16))
