@@ -159,3 +159,31 @@ def test_hybrid_obs_flows_through_agent(tmp_path: Path) -> None:
         assert 0 <= action < 8
     finally:
         env.close()
+
+
+def test_wrapper_forwards_every_env_member_the_codebase_uses() -> None:
+    """The wrapper's public surface must cover what callers actually invoke.
+
+    gymnasium's ``Wrapper`` has no generic ``__getattr__``, so anything not
+    forwarded explicitly raises ``AttributeError`` through the wrapper. The live
+    API calls ``movement_pressures()`` and ``arrived_count`` on whatever env it
+    holds - a ``HybridStateWrapper`` for any dqn-hybrid session - and swallowed
+    the failure, so every hybrid live run served a dead dashboard
+    (decisions.md 2026-08-28).
+    """
+    from src.env.sumo_env import SUMOEnv
+    from src.ml.hybrid_wrapper import HybridStateWrapper
+
+    # members the API / supervisor / eval layers call on a possibly-wrapped env
+    required = [
+        "get_action_mask",
+        "movement_features",
+        "movement_pressures",
+        "arrived_count",
+        "departed_count",
+        "loaded_count",
+    ]
+    missing = [m for m in required if not hasattr(HybridStateWrapper, m)]
+    assert not missing, f"HybridStateWrapper does not forward: {missing}"
+    for m in required:  # and each must be a real SUMOEnv member, not a typo
+        assert hasattr(SUMOEnv, m), f"{m} is not a SUMOEnv member"

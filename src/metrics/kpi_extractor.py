@@ -67,6 +67,7 @@ class _Trip:
     depart: float
     waiting_time: float
     waiting_count: int
+    arrived: bool = True  # False for a trip still in the network at episode end
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,17 @@ class EpisodeKPIs:
     insertion_backlog_fraction: float
     gridlock_censored: bool
     n_vehicles_after_warmup: int
+    # --- audit fields (added 2026-08-28; see decisions.md) ---
+    # The pre-registered censor above sees only INSERTION backlog, so an episode whose
+    # vehicles enter normally and then jam inside the network scores backlog=0.0 and
+    # passes as clean. These expose that case without redefining the frozen criterion.
+    network_jam_fraction: float = 0.0  # (departed - arrived) / departed
+    gridlock_network: bool = False  # network_jam_fraction above threshold
+    n_unfinished_after_warmup: int = 0  # in-window trips still in the net at the end
+    # The locked wait KPIs computed over COMPLETED trips only - the pre-fix definition.
+    # Kept so the change to censored-at-end waits is auditable rather than silent.
+    avg_waiting_time_completed: float = float("nan")
+    wait_p95_completed: float = float("nan")
 
     def to_episode_kpi_fields(self) -> dict[str, Any]:
         """Return only the columns the ``episode_kpi`` table stores (models.py)."""
@@ -108,12 +120,18 @@ def _parse_tripinfo(path: Path) -> list[_Trip]:
     """Parse a SUMO trip-info XML into the per-vehicle rows the KPIs need."""
     trips: list[_Trip] = []
     for el in ET.parse(path).getroot().iter("tripinfo"):
+        # With --tripinfo-output.write-unfinished, vehicles still in the network at
+        # episode end are emitted with arrival="-1" (and arrivalLane="" etc). Their
+        # waitingTime is the wait accumulated so far, i.e. censored at episode end.
+        arrival = el.get("arrival")
+        arrived = arrival is not None and float(arrival) >= 0.0
         trips.append(
             _Trip(
                 vid=el.get("id", ""),
                 depart=float(el.get("depart", "nan")),
                 waiting_time=float(el.get("waitingTime", "0")),
                 waiting_count=int(float(el.get("waitingCount", "0"))),
+                arrived=arrived,
             )
         )
     return trips
@@ -230,6 +248,13 @@ def extract_kpis(
     throughput = arrived_count / duration_h if duration_h > 0 else float("nan")
 
     backlog = (loaded_count - departed_count) / loaded_count if loaded_count else 0.0
+    # Vehicles that entered but never completed: the gridlock the insertion backlog
+    # cannot see. departed/arrived were already collected and previously discarded.
+    jam_fraction = (
+        (departed_count - arrived_count) / departed_count if departed_count else 0.0
+    )
+    completed = [t for t in in_window if t.arrived]
+    waits_completed = [t.waiting_time for t in completed]
 
     return EpisodeKPIs(
         avg_waiting_time=_safe_mean(waits),
@@ -248,4 +273,11 @@ def extract_kpis(
         insertion_backlog_fraction=backlog,
         gridlock_censored=backlog > gridlock_threshold,
         n_vehicles_after_warmup=len(in_window),
+        network_jam_fraction=jam_fraction,
+        gridlock_network=jam_fraction > gridlock_threshold,
+        n_unfinished_after_warmup=len(in_window) - len(completed),
+        avg_waiting_time_completed=_safe_mean(waits_completed),
+        wait_p95_completed=(
+            float(np.percentile(waits_completed, 95)) if waits_completed else float("nan")
+        ),
     )

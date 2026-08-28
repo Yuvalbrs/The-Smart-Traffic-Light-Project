@@ -62,6 +62,9 @@ _OFFICIAL_LSTM = (
     # (decisions.md 2026-08-28); must match train_matrix._OFFICIAL_LSTM
     _REPO_ROOT / "checkpoints" / "lstm" / "lstm__data-aa6ef4458cda__lstm-f70dca8c6ff1.pt"
 )
+# The pre-registered confirmatory scenario set (prereg s2). SCN-05 is the held-out
+# test regime; SCN-01..03 are the training regimes; SCN-04 is the interpolation check.
+CONFIRMATORY_SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")
 TRAIN_SEEDS = (42, 123, 2024)
 DQN_VARIANTS = ("plain", "hybrid", "random-lstm")
 DEFAULT_EVAL_SEEDS = (7000, 7001, 7002, 7003, 7004)  # held-out; disjoint from train/val seeds
@@ -120,8 +123,13 @@ def _dqn_algos() -> list[Algo]:
                 forecaster, lstm_version = None, None
             elif variant == "hybrid":
                 forecaster, lstm_version = load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
-            else:  # random-lstm: re-create the SAME frozen control used in training (seed-matched)
-                forecaster, lstm_version = random_forecaster(seed=seed), "random-lstm"
+            else:  # random-lstm: re-create the SAME frozen control used in training
+                # seed-matched AND stats-matched: both must mirror train_matrix._forecaster_for
+                # exactly, or the agent is evaluated on inputs it never saw.
+                forecaster, lstm_version = (
+                    random_forecaster(seed=seed, stats_from=load_forecaster(str(_OFFICIAL_LSTM))),
+                    "random-lstm",
+                )
             algos.append(Algo(
                 name=f"dqn-{variant}-s{seed}", controller_kind="dqn",
                 agent=_load_agent(ckpt, obs_dim), forecaster=forecaster,
@@ -221,10 +229,23 @@ def main() -> None:
     build_actuated_add()
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # The confirmatory set is FIXED, not a directory glob: load_all() returns all 14
+    # scenarios including SCN-A1..A4, which use the arterial two-junction schema while
+    # this runner builds the single-intersection net and single-junction Webster plans.
+    # The default campaign is 5 scenarios x 5 seeds x 12 algos = 300 rows (prereg s2).
     scenarios = (
         [load_scenario(SCENARIO_DIR / f"scn_{s.split('-')[1]}.yaml") for s in args.scenarios]
-        if args.scenarios else load_all()
+        if args.scenarios
+        else [s for s in load_all() if s.id in CONFIRMATORY_SCENARIOS]
     )
+    missing = {s.id for s in scenarios} - set(CONFIRMATORY_SCENARIOS)
+    if not args.scenarios and missing:
+        raise SystemExit(f"confirmatory set resolved to unexpected scenarios: {missing}")
+    if any(s.is_arterial for s in scenarios):
+        raise SystemExit(
+            "arterial scenarios need the two-junction net and per-junction Webster plans; "
+            "this runner is single-intersection only."
+        )
     dqn_algos = [] if args.no_dqn else _dqn_algos()
 
     engine = create_db_engine(args.db)
@@ -232,10 +253,25 @@ def main() -> None:
     sha, sv = git_sha(short=True), sumo_version()
 
     csv_path = _OUT_DIR / "eval_results.csv"
+    # A scoped/smoke run used to truncate the full campaign CSV in place, leaving the
+    # analysis to build confident tables from 12 rows. Partial runs write elsewhere.
+    is_full_run = not args.scenarios and not args.no_dqn
+    if not is_full_run:
+        tag = "-".join(args.scenarios) if args.scenarios else "no-dqn"
+        csv_path = _OUT_DIR / f"eval_results_partial_{tag}.csv"
+        print(f"[eval] partial run -> {csv_path.name} (the campaign CSV is left intact)")
     csv_f = csv_path.open("w", newline="", encoding="utf-8")
     csv_w = csv.writer(csv_f)
+    # Provenance travels WITH the rows: the CSV is the only artifact the analysis reads,
+    # so a chain that lives only in SQLite cannot satisfy prereg s9, and cannot stop the
+    # analysis from silently running on a pre-fix campaign (it did, for months).
     csv_w.writerow(["algo", "variant", "train_seed", "scenario", "eval_seed", "total_reward",
-                    *(_SCALAR_KPIS), "gridlock_censored"])
+                    *(_SCALAR_KPIS), "gridlock_censored",
+                    "gridlock_network", "network_jam_fraction", "insertion_backlog_fraction",
+                    "loaded_count", "departed_count", "arrived_count",
+                    "n_vehicles_after_warmup", "n_unfinished_after_warmup",
+                    "avg_waiting_time_completed", "wait_p95_completed",
+                    "lstm_version", "git_sha", "sumo_version"])
 
     n_rows = 0
     with Session(engine) as session:
@@ -275,6 +311,12 @@ def main() -> None:
                         algo.name, algo.variant or "", algo.train_seed if algo.train_seed else "",
                         scenario.id, eval_seed, round(total_reward, 1),
                         *[getattr(kpis, k) for k in _SCALAR_KPIS], int(kpis.gridlock_censored),
+                        int(kpis.gridlock_network), kpis.network_jam_fraction,
+                        kpis.insertion_backlog_fraction,
+                        kpis.loaded_count, kpis.departed_count, kpis.arrived_count,
+                        kpis.n_vehicles_after_warmup, kpis.n_unfinished_after_warmup,
+                        kpis.avg_waiting_time_completed, kpis.wait_p95_completed,
+                        algo.lstm_version or "", sha, sv,
                     ])
                     csv_f.flush()
                     n_rows += 1

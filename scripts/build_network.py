@@ -166,7 +166,29 @@ def build_net(network: NetworkSpec = SINGLE, movements_path: Path = _VAULT_MOVEM
     field netconvert writes - the ``generated on <timestamp>`` line in the header
     comment - so regenerating the net (every test run / data-gen run does) never
     dirties git with a meaningless timestamp diff.
+
+    EVERY build validates: the movement wiring against ``movements.yaml`` and the
+    right-of-way matrix (every free link yields to all its foes). These assertions
+    used to live only in the CLI path, while ~20 scripts called ``build_net()``
+    bare - so a change to the .con/.edg sources could silently re-order link
+    indices under the committed binding and run a whole campaign mis-wired. That
+    is defect #2 one level up; the guard now runs wherever the net is built.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``movements_path`` is absent. Skipping pass 2 silently would ship a net
+        carrying netconvert's invented right-of-way matrix - defect #4 exactly.
+    AssertionError
+        If the wiring or the right-of-way matrix does not match the spec.
     """
+    movements_path = Path(movements_path)
+    if not movements_path.exists():
+        raise FileNotFoundError(
+            f"movements spec not found at {movements_path}. It is the SSOT for the "
+            "phase program baked into the right-of-way matrix; building without it "
+            "would silently produce a net with netconvert's invented priorities."
+        )
     cmd = [
         checkBinary("netconvert"),
         "--node-files", str(_NET_DIR / f"{network.name}.nod.xml"),
@@ -177,14 +199,27 @@ def build_net(network: NetworkSpec = SINGLE, movements_path: Path = _VAULT_MOVEM
         "--tls.default-type", "static",
         "--offset.disable-normalization", "true",
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    _run_netconvert(cmd)
     _normalize_generated_timestamp(network.net_file)
-    if Path(movements_path).exists():
-        tll = _write_tll(network, movements_path)
-        subprocess.run(
-            cmd + ["--tllogic-files", str(tll)], check=True, capture_output=True, text=True
-        )
-        _normalize_generated_timestamp(network.net_file)
+    tll = _write_tll(network, movements_path)
+    _run_netconvert(cmd + ["--tllogic-files", str(tll)])
+    _normalize_generated_timestamp(network.net_file)
+
+    movements = yaml.safe_load(movements_path.read_text(encoding="utf-8"))["movements"]
+    bindings = resolve_bindings(network, movements)  # asserts the wiring per TLS
+    assert_free_links_yield(network, movements, bindings)
+
+
+def _run_netconvert(cmd: list[str]) -> None:
+    """Run netconvert, surfacing its stderr instead of discarding it.
+
+    netconvert is exactly the component whose silent behaviour caused the baked
+    right-of-way defect; swallowing its warnings is the same mistake as
+    ``--no-warnings true``.
+    """
+    proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    if proc.stderr.strip():
+        print(f"[net] netconvert stderr:\n{proc.stderr.strip()}")
 
 
 def _write_tll(network: NetworkSpec, movements_path: Path) -> Path:
@@ -448,10 +483,14 @@ def write_binding_file(
     return network.binding_file
 
 
-def _build_and_bind(network: NetworkSpec, movements: dict) -> None:
+def _build_and_bind(
+    network: NetworkSpec, movements: dict, movements_path: Path = _VAULT_MOVEMENTS
+) -> None:
     """Build one network, run all assertions, write its binding, print the table."""
     print(f"[net] building {network.net_file.name} via netconvert ...")
-    build_net(network)
+    # forward the spec: baking the TLS program from a DIFFERENT file than the one the
+    # assertions validate against is the shape of the baked-right-of-way defect
+    build_net(network, movements_path)
     assert_net_offset(network.net_file)
     print("[net] netOffset == (0,0) OK")
 
@@ -493,7 +532,7 @@ def main() -> None:
 
     targets = list(NETWORKS.values()) if args.network == "all" else [NETWORKS[args.network]]
     for network in targets:
-        _build_and_bind(network, movements)
+        _build_and_bind(network, movements, args.movements)
 
     print("\n[net] OK - T-01-02 network(s) built and asserted.")
     sys.exit(0)

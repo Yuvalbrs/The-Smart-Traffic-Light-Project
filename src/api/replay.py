@@ -198,8 +198,19 @@ def _trace_files(
             hits.extend(sorted(directory.glob(scenario + "_seed" + str(seed) + "_" + tail)))
     out: list[Path] = []
     for hit in hits:
-        if hit not in out:
-            out.append(hit)
+        # Containment check: `scenario`/`algo` reach glob() straight from the query
+        # string, and Path.glob resolves ".." as real traversal, so a crafted scenario
+        # can address files outside the trace dirs. Keep only hits that stay inside.
+        try:
+            resolved = hit.resolve()
+            if not any(
+                resolved.is_relative_to(d.resolve()) for d in trace_dirs if d.is_dir()
+            ):
+                continue
+        except (OSError, ValueError):
+            continue
+        if resolved not in out:
+            out.append(resolved)
     return out
 
 

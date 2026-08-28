@@ -51,15 +51,18 @@ def _forecaster_for(variant: str, seed: int):
     """Return ``(forecaster_or_None, provenance_label)`` for a variant."""
     if variant == "plain":
         return None, None
+    if not _OFFICIAL_LSTM.exists():
+        raise FileNotFoundError(
+            f"{variant} needs the forecaster checkpoint at {_OFFICIAL_LSTM} "
+            "(regenerate via scripts/train_lstm.py - it is gitignored)."
+        )
     if variant == "hybrid":
-        if not _OFFICIAL_LSTM.exists():
-            raise FileNotFoundError(
-                f"hybrid variant needs the forecaster checkpoint at {_OFFICIAL_LSTM} "
-                "(regenerate via scripts/train_lstm.py - it is gitignored)."
-            )
         return load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
     if variant == "random-lstm":
-        return random_forecaster(seed=seed), "random-lstm"
+        # scale-matched to the deployed forecaster: without its input stats the control
+        # arm's forecast dims arrive in raw vehicle units (see random_forecaster docstring)
+        official = load_forecaster(str(_OFFICIAL_LSTM))
+        return random_forecaster(seed=seed, stats_from=official), "random-lstm"
     raise ValueError(f"unknown variant {variant!r}")
 
 

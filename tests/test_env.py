@@ -202,7 +202,9 @@ def test_env_forces_switch_at_max_green(tmp_path) -> None:
 
     scn = next(s for s in load_all() if s.id == "SCN-02")
     route = write_routes(scn, 0, out_dir=tmp_path)
-    env = SUMOEnv(route, episode_length_s=600)
+    # isolate the max-green rule: anti-starvation would otherwise force the switch
+    # first (it triggers at max_red - one window, i.e. earlier than max_green)
+    env = SUMOEnv(route, episode_length_s=600, enforce_max_red=False)
     try:
         env.reset()
         forbidden = False
@@ -214,6 +216,50 @@ def test_env_forces_switch_at_max_green(tmp_path) -> None:
                 assert info["mask"].sum() == 7  # all but the current
                 break
         assert forbidden, "max-green never forced a switch"
+    finally:
+        env.close()
+
+
+def test_anti_starvation_bounds_red_time(tmp_path) -> None:
+    """The locked ``max_red_s`` bound must actually bind (decisions.md 2026-08-28).
+
+    It was documented in movements.yaml as "a starved direction is forced green
+    before red exceeds this" but never implemented: ``compute_mask`` bounded the
+    current phase's GREEN, which says nothing about how long an unserved movement
+    waits. A policy preferring one axis held four movements red for a whole
+    3600 s episode. The mask must now force the longest-waiting movement to be
+    served, and must still never be empty.
+    """
+    from scripts.build_routes import write_routes
+    from src.scenarios.config import load_all
+
+    scn = next(s for s in load_all() if s.id == "SCN-02")
+    route = write_routes(scn, 0, out_dir=tmp_path)
+    env = SUMOEnv(route, episode_length_s=900)
+    try:
+        _, info = env.reset()
+        ix = env._intersections[env._tls_id]
+        controlled = [m for m in ix.movement_ids if m not in ix.free_movements]
+        last_green = {m: 0.0 for m in controlled}
+        worst = 0.0
+        for _ in range(90):
+            mask = info["mask"]
+            assert mask.any(), "mask must never be empty"
+            # adversarial: cling to the NS group, the pattern that starved E/W movements
+            action = next((a for a in (0, 1, 2, 3) if mask[a]), int(np.flatnonzero(mask)[0]))
+            _, _, term, trunc, info = env.step(action)
+            t = info["sim_time"]
+            for m in ix.phase_green(action):
+                last_green[m] = t
+            worst = max(worst, max(t - last_green[m] for m in controlled))
+            if term or trunc:
+                break
+        # unenforced this was the full episode; the bound plus one decision window and
+        # the yellow/all-red clearance is the achievable floor at a 10 s granularity
+        assert worst <= ix.max_red_s + 3 * env._decision_interval_s, (
+            f"worst red {worst}s exceeds the enforceable bound "
+            f"({ix.max_red_s}s + clearance); anti-starvation is not binding"
+        )
     finally:
         env.close()
 

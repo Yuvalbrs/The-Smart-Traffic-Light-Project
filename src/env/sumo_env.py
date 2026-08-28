@@ -153,6 +153,7 @@ class SUMOEnv(gym.Env):
         switch_penalty: float = 0.1,
         gridlock_penalty_mu: float = 0.0,
         gridlock_queue_threshold: float = 20.0,
+        enforce_max_red: bool = True,
         sumo_seed: int = 42,
         use_gui: bool = False,
         movements_path: str | Path = _VAULT_MOVEMENTS,
@@ -184,6 +185,13 @@ class SUMOEnv(gym.Env):
         self._decision_interval_s = decision_interval_s
         self._switch_penalty = switch_penalty
         self._gridlock_penalty_mu = gridlock_penalty_mu
+        # Anti-starvation enforcement (decisions.md 2026-08-28). ON by default: a signal
+        # controller that can hold an approach red indefinitely is not deployable, and
+        # the locked max_red_s bound was previously documented but unenforced.
+        self._enforce_max_red = enforce_max_red
+        self._red_margin_s = decision_interval_s  # fire a window early: switching costs time
+        # per-TLS, per-movement wall time of the last protected green
+        self._last_green_time: dict[str, dict[str, float]] = {}
         self._gridlock_queue_threshold = gridlock_queue_threshold
         self._sumo_seed = sumo_seed
         self._use_gui = use_gui
@@ -251,6 +259,13 @@ class SUMOEnv(gym.Env):
             args += ["-a", str(self._additional_file)]
         if self._tripinfo_path is not None:  # per-vehicle KPIs (wait/stops/p95)
             args += ["--tripinfo-output", str(self._tripinfo_path)]
+            # Without this SUMO writes a <tripinfo> only for vehicles that ARRIVED. With
+            # --time-to-teleport -1 a jammed vehicle never arrives, so the vehicles with
+            # the worst waits were silently excluded from every wait statistic: a
+            # controller that stranded more traffic scored a BETTER average wait.
+            # Emitting unfinished trips makes the wait KPIs censored-at-episode-end
+            # rather than survivorship-biased.
+            args += ["--tripinfo-output.write-unfinished", "true"]
         return args
 
     def _build_intersection(self, tls_id: str) -> Intersection:
@@ -319,8 +334,18 @@ class SUMOEnv(gym.Env):
             self._last_action[tls_id] = 0
             self._time_in_phase[tls_id] = 0.0
             self._trace_phase[tls_id] = 0
+            # every movement counts as last-served at t=0, so red timers start fresh
+            self._last_green_time[tls_id] = {
+                mid: 0.0 for mid in self._intersections[tls_id].movement_ids
+            }
         self._sim_time = 0.0
-        self._loaded = self._departed = self._arrived = self._collisions = 0
+        self._departed = self._arrived = self._collisions = 0
+        # SUMO has already loaded the first vehicles before the first simulationStep, and
+        # _tick only accumulates AFTER stepping, so those loads were lost. That made
+        # insertion_backlog_fraction = (loaded-departed)/loaded go NEGATIVE (measured
+        # -0.001) and systematically UNDER-report backlog - and gridlock_censored is a
+        # threshold on it, so the censor under-triggered. Seed the counter here.
+        self._loaded = traci.simulation.getLoadedNumber()
 
         if self._signal_mode == "actuated":
             # hand the lights to SUMO's actuated program; we never command them.
@@ -429,6 +454,10 @@ class SUMOEnv(gym.Env):
             else:
                 self._time_in_phase[tls_id] += self._decision_interval_s
             self._last_action[tls_id] = action  # one-hot / info reflect the NEW phase
+            # this phase's movements are being served now: reset their red timers
+            served = self._last_green_time.setdefault(tls_id, {})
+            for mid in ix.phase_green(action):
+                served[mid] = self._sim_time
 
             obs[tls_id] = self._observe(tls_id, pressures)
             rewards[tls_id] = reward
@@ -536,6 +565,38 @@ class SUMOEnv(gym.Env):
             self._time_in_phase[tls_id],
             min_green=ix.min_green_s,
             max_green=ix.max_green_s,
+            starving_phases=self._starving_phases(tls_id),
+        )
+
+    def _starving_phases(self, tls_id: str) -> np.ndarray | None:
+        """Phases serving a movement whose red time has reached ``max_red_s``.
+
+        Enforces the locked anti-starvation bound from movements.yaml, which was
+        documented but never implemented (decisions.md 2026-08-28). Returns ``None``
+        when enforcement is disabled or nothing is starving, so the timer mask stands.
+
+        The trigger fires ``_red_margin_s`` early because a forced switch still costs
+        yellow (+ all-red on a barrier crossing) before the green actually starts.
+        """
+        if not self._enforce_max_red:
+            return None
+        ix = self._intersections[tls_id]
+        last_green = self._last_green_time[tls_id]
+        free = set(ix.free_movements)
+        reds = {
+            mid: self._sim_time - last_green.get(mid, 0.0)
+            for mid in ix.movement_ids
+            if mid not in free
+        }
+        worst_mid, worst_red = max(reds.items(), key=lambda kv: kv[1])
+        if worst_red < ix.max_red_s - self._red_margin_s:
+            return None
+        # Restrict to phases serving the LONGEST-waiting movement specifically. Allowing
+        # any starved movement to satisfy the rule lets a policy keep picking whichever
+        # starved phase it prefers while the true worst case keeps waiting (measured:
+        # 280 s tail under a random policy). Serving the worst first bounds the tail.
+        return np.array(
+            [worst_mid in ix.phase_green(a) for a in range(N_PHASES)], dtype=bool
         )
 
     def _advance_window(

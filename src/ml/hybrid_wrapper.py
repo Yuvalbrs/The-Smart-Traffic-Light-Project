@@ -63,18 +63,33 @@ def load_forecaster(
     return model
 
 
-def random_forecaster(*, seed: int | None = None) -> LSTMForecaster:
+def random_forecaster(
+    *, seed: int | None = None, stats_from: LSTMForecaster | None = None
+) -> LSTMForecaster:
     """A frozen, UNTRAINED forecaster for the random-LSTM control ablation (T-03-07/T-04-03).
 
-    Same architecture as the real forecaster, but random initial weights and default (0/1)
-    input stats - so the wrapper's z-score is a no-op and the 36 forecast dims carry a fixed,
-    meaningless signal. This isolates "does a *real* forecast help the DQN?" from "does *any*
-    extra input help?" - an academically non-negotiable control. ``seed`` makes each run's
-    control reproducible; the model is frozen (``eval`` + no grad) exactly like the trained one.
+    Same architecture and random initial weights, isolating "does a *real* forecast help?"
+    from "does *any* extra input help?".
+
+    ``stats_from`` is REQUIRED for a valid comparison; it copies the deployed forecaster's
+    fitted ``input_mean``/``input_std`` into the control. Without it the control keeps the
+    default 0/1 buffers, the wrapper's z-score becomes a no-op, and the control's 36 dims
+    arrive in RAW vehicle units while the treatment's arrive standardized. Because the head
+    is residual (``forecast = current_queue + delta``) and an untrained head emits
+    ``|delta| <= 0.2`` at every queue magnitude, that made the control's forecast block a
+    copy of the raw current queue - up to ~60 against base features in [-1, 1], dominating
+    the first layer ~50:1 at initialization. The two arms were differently-conditioned
+    optimization problems rather than the same network given different information.
+    See decisions.md 2026-08-28.
+
+    ``seed`` makes each run's control reproducible; the model is frozen (``eval`` + no grad)
+    exactly like the trained one.
     """
     if seed is not None:
         torch.manual_seed(seed)
     model = LSTMForecaster()
+    if stats_from is not None:
+        model.set_input_stats(stats_from.input_mean.clone(), stats_from.input_std.clone())
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
@@ -148,6 +163,31 @@ class HybridStateWrapper(gym.Wrapper):
     def movement_features(self) -> tuple[np.ndarray, np.ndarray]:
         """Forward the base env's ``(queue, count)`` per-movement features."""
         return self.env.movement_features()
+
+    # gymnasium's Wrapper has NO generic __getattr__, so every SUMOEnv member a caller
+    # uses must be forwarded explicitly. These four were missing: the live API calls
+    # movement_pressures() and arrived_count on whatever env it holds, which is this
+    # wrapper for any dqn-hybrid session, and the resulting AttributeError was swallowed
+    # by a blanket handler - every hybrid live run served a permanently dead dashboard.
+    # tests/test_hybrid_wrapper.py pins the wrapper's surface against SUMOEnv's.
+    def movement_pressures(self) -> np.ndarray:
+        """Forward the base env's raw per-movement pressures."""
+        return self.env.movement_pressures()
+
+    @property
+    def arrived_count(self) -> int:
+        """Forward the base env's completed-trip counter."""
+        return self.env.arrived_count
+
+    @property
+    def departed_count(self) -> int:
+        """Forward the base env's insertion counter."""
+        return self.env.departed_count
+
+    @property
+    def loaded_count(self) -> int:
+        """Forward the base env's demand counter."""
+        return self.env.loaded_count
 
     def _augment(self, base_obs: np.ndarray) -> np.ndarray:
         """Append current features to history, run the forecaster, concat the 36 forecast dims."""

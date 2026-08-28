@@ -81,6 +81,7 @@ class Intersection:
         all_red_s: int,
         min_green_s: int,
         max_green_s: int,
+        max_red_s: int = 60,
     ) -> None:
         self.tls_id = tls_id
         self.movement_ids = movement_ids  # canonical M0..M11 order
@@ -95,6 +96,10 @@ class Intersection:
         self.all_red_s = all_red_s
         self.min_green_s = min_green_s
         self.max_green_s = max_green_s
+        # Anti-starvation bound: the longest a controlled movement may stay red. Distinct
+        # from max_green_s (which bounds the CURRENT phase); conflating the two left the
+        # bound unenforced - see decisions.md 2026-08-28.
+        self.max_red_s = max_red_s
         # free (uncontrolled right-turn) links stay green through every transition
         self._free_links: set[int] = set()
         for mid in free_movements:
@@ -142,6 +147,7 @@ class Intersection:
         min_green_s = int(safety.get("min_green_s", 10))
         # max-green == max-red anti-starvation bound (60s, safety-masking.md / decisions.md)
         max_green_s = int(safety.get("max_green_s", safety.get("max_red_s", 60)))
+        max_red_s = int(safety.get("max_red_s", max_green_s))
 
         controlled_links = conn.trafficlight.getControlledLinks(tls_id)
         n_links = len(controlled_links)
@@ -173,7 +179,18 @@ class Intersection:
             all_red_s=all_red_s,
             min_green_s=min_green_s,
             max_green_s=max_green_s,
+            max_red_s=max_red_s,
         )
+
+    @property
+    def free_movements(self) -> list[str]:
+        """The free (never-signalized) right-turn movement ids."""
+        return list(self._free)
+
+    def phase_green(self, action: int) -> list[str]:
+        """The movement ids an action gives protected green."""
+        self._check_action(action)
+        return list(self._phase_green[action])
 
     @property
     def controlled_in_lanes(self) -> list[str]:

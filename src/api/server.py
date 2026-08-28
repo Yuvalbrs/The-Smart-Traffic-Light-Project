@@ -101,7 +101,13 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     app.state.sessions = SessionManager(app.state.unity_hub, app.state.dash_hub)
     app.state.trace_dirs = list(trace_dirs) if trace_dirs is not None else list(_TRACE_DIRS)
     path = Path(db_path) if db_path is not None else _DB_PATH
-    app.state.engine = create_db_engine(path) if path.exists() else None
+    # Create the engine unconditionally: SQLite makes the file on first write, and gating
+    # on path.exists() at import time permanently 503'd every replay endpoint on a fresh
+    # deployment even after live runs had populated the database. One engine per process,
+    # shared with LiveSession._persist so sessions do not each leak their own pool.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    app.state.engine = create_db_engine(path)
+    app.state.db_path = path
     app.include_router(replay_router)
 
     @app.get("/health")

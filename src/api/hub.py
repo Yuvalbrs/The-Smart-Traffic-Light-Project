@@ -14,6 +14,7 @@ sequence numbers already carried by ``sim_frame`` let a client detect the gap it
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 MAX_QUEUE = 8  # per-client buffer depth (T-05-01 DoD)
@@ -77,6 +78,12 @@ class Hub:
     def __init__(self, name: str) -> None:
         self.name = name
         self._subs: set[Subscriber] = set()
+        # subscribe/unsubscribe run on the event-loop thread; publish() runs on the SUMO
+        # stepping thread. Without this lock a client connecting or dropping mid-publish
+        # raises "Set changed size during iteration" INSIDE the simulation loop, which
+        # surfaces as a bogus episode failure. The React/Unity clients reconnect every
+        # 1.5s, so the window is hit in practice.
+        self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self.published = 0
 
@@ -91,22 +98,26 @@ class Hub:
     def subscribe(self, name: str = "client") -> Subscriber:
         """Register and return a new subscriber mailbox."""
         sub = Subscriber(name)
-        self._subs.add(sub)
+        with self._lock:
+            self._subs.add(sub)
         return sub
 
     def unsubscribe(self, sub: Subscriber) -> None:
         """Remove a subscriber (idempotent)."""
-        self._subs.discard(sub)
+        with self._lock:
+            self._subs.discard(sub)
 
     @property
     def subscriber_count(self) -> int:
         """How many clients are currently attached."""
-        return len(self._subs)
+        with self._lock:
+            return len(self._subs)
 
     @property
     def dropped_total(self) -> int:
         """Frames dropped across all current subscribers."""
-        return sum(s.dropped for s in self._subs)
+        with self._lock:
+            return sum(s.dropped for s in self._subs)
 
     def publish(self, frame: dict[str, Any]) -> None:
         """Offer ``frame`` to every subscriber. Safe to call from a non-async thread.
@@ -114,9 +125,11 @@ class Hub:
         Never raises and never waits: this runs inside the SUMO stepping loop.
         """
         self.published += 1
-        if not self._subs:
-            return
-        loop, subs = self._loop, list(self._subs)
+        with self._lock:
+            if not self._subs:
+                return
+            subs = list(self._subs)
+        loop = self._loop
         if loop is None or not loop.is_running():
             for sub in subs:  # no loop yet (tests, or pre-startup): degrade to direct offer
                 sub.offer(frame)

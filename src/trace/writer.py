@@ -64,6 +64,10 @@ class JsonlWriter:
             validate_envelope(envelope)
         json.dump(envelope, self._fh, separators=(",", ":"), sort_keys=True)
         self._fh.write("\n")
+        # Flush every line: frames arrive at 1 Hz so the cost is nil, and it means a hard
+        # crash (SIGKILL, or a native fault inside libsumo that skips Python's finally
+        # chain) truncates the trace instead of losing the whole buffered tail.
+        self._fh.flush()
         self._count += 1
 
     @property
