@@ -33,16 +33,12 @@ from scripts.build_network import build_net
 from scripts.env_factory import build_env
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
+from src.provenance.official import OFFICIAL_LSTM, official_lstm_version
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
-_OFFICIAL_LSTM = (
-    _REPO_ROOT / "checkpoints" / "lstm"
-    # official ckpt (ADR-006); retrained on post-gridlock-fix data, SS@60=0.081
-    # SHIP_WITH_CAVEAT (decisions.md 2026-08-28)
-    / "lstm__data-aa6ef4458cda__lstm-f70dca8c6ff1.pt"
-)
+_OFFICIAL_LSTM = OFFICIAL_LSTM  # src/provenance/official.py
 SEEDS = (42, 123, 2024)
 VARIANTS = ("plain", "hybrid", "random-lstm")
 
@@ -91,6 +87,14 @@ def _run_cell(variant: str, seed: int, args: argparse.Namespace, sha: str) -> di
         episode_length_s=args.episode_length or 3600,
         switch_penalty=args.switch_penalty,
         forecast=(variant != "plain"), forecast_ckpt=fc_label,
+        # TrainConfig.lstm_version was serialized into every config.yaml and every
+        # checkpoint and NEVER assigned, so the whole matrix recorded an empty string -
+        # the "a recorded param nothing populates" scar, in its provenance form.
+        lstm_version=(
+            "" if variant == "plain"
+            else "random-lstm" if variant == "random-lstm"
+            else official_lstm_version()
+        ),
         validation_every=args.validation_every,
         git_sha=sha,
     )

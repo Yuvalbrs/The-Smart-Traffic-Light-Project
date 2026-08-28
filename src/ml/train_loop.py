@@ -221,6 +221,15 @@ def _set_global_seeds(seed: int) -> None:
     torch.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # Two same-seed runs could still diverge ACROSS MACHINES: CPU reduction order in
+    # Linear/LSTM varies with the thread count, and over ~100k updates through an argmax
+    # policy those last-bit differences become macroscopic. SUMO is already pinned to
+    # --threads 1; pin torch to match.
+    torch.set_num_threads(1)
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:  # noqa: BLE001 - not all builds/ops support it; determinism is best-effort
+        pass
 
 
 def save_checkpoint(
@@ -350,16 +359,46 @@ def train(
     # Decorrelate the sampling RNG from the exploration RNG (both would otherwise be Random(seed)).
     buffer = ReplayBuffer(cfg.buffer_capacity, n_actions=N_PHASES, seed=cfg.seed + 1_000_000)
 
-    (run_dir / "config.yaml").write_text(
-        yaml.safe_dump(cfg.to_dict(), sort_keys=False), encoding="utf-8"
-    )
-
     start_ep, total_steps, best_val_reward = 0, 0, -math.inf
     if resume is not None:
         meta = load_checkpoint(resume, agent)
+        # The stored config was loaded and never compared, while config.yaml was
+        # overwritten with the NEW settings BEFORE resuming - so a 5-episode smoke run's
+        # checkpoints could be silently continued by a 300-episode run at a different
+        # episode length, with config.yaml claiming the new values throughout. Refuse
+        # instead: a resume must be the same experiment.
+        old = meta.get("config") or {}
+        new = cfg.to_dict()
+        run_defining = (
+            "variant", "seed", "episode_length_s", "gamma", "lr", "switch_penalty",
+            "gridlock_penalty_mu", "forecast", "forecast_ckpt", "lstm_version",
+            "distributional", "cvar_alpha", "decision_interval_s",
+        )
+        drift = {
+            k: (old.get(k), new.get(k))
+            for k in run_defining
+            if k in old and old.get(k) != new.get(k)
+        }
+        if drift:
+            raise ValueError(
+                f"refusing to resume {resume.name}: it was trained with different "
+                f"run-defining settings {drift}. Use --force to start fresh, or point at "
+                "the matching run directory."
+            )
+        if cfg.n_episodes <= meta["episode"] + 1:
+            raise ValueError(
+                f"refusing to resume {resume.name}: it is already at episode "
+                f"{meta['episode']} but n_episodes={cfg.n_episodes}, so there is nothing "
+                "to do. This previously reported success with a negative episode count."
+            )
         start_ep = meta["episode"] + 1
         total_steps = meta["total_steps"]
         best_val_reward = meta["best_val_reward"]
+
+    # written only AFTER the resume check, so it never advertises settings that were rejected
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(cfg.to_dict(), sort_keys=False), encoding="utf-8"
+    )
 
     append = resume is not None
     ep_w, ep_f = _open_csv(
@@ -383,20 +422,24 @@ def train(
             scenario_id = cfg.train_scenarios[ep % len(cfg.train_scenarios)]
             route_seed = cfg.seed * _ROUTE_SEED_STRIDE + ep  # per-(run, episode) disjoint traffic
             env = make_train_env(scenario_id, route_seed)
-            if skill is not None:
-                skill.reset_episode()
-
-            obs, info = env.reset()
-            mask = info["mask"]
-            done = terminated = truncated = False
-            ep_reward, ep_steps = 0.0, 0
-            losses: list[float] = []
-            grad_norms: list[float] = []
-            q_means: list[float] = []
-            q_maxes: list[float] = []
-            mask_legal_total = 0  # sum of legal-action counts -> mask fire-rate (T-03-08 gate)
-            eps = epsilon_at(total_steps, cfg.eps_start, cfg.eps_end, cfg.eps_decay_steps)
+            # NOTE: reset() and the first mask read must sit INSIDE the try below. Under
+            # LIBSUMO_AS_TRACI=1 there is a single process-global connection, so an
+            # exception here that skips env.close() leaks it and every subsequent matrix
+            # cell fails to start - turning one bad cell into a whole-batch loss and
+            # inverting train_matrix's partial-failure protocol.
             try:
+                if skill is not None:
+                    skill.reset_episode()
+                obs, info = env.reset()
+                mask = info["mask"]
+                done = terminated = truncated = False
+                ep_reward, ep_steps = 0.0, 0
+                losses: list[float] = []
+                grad_norms: list[float] = []
+                q_means: list[float] = []
+                q_maxes: list[float] = []
+                mask_legal_total = 0  # legal-action counts -> mask fire-rate (T-03-08 gate)
+                eps = epsilon_at(total_steps, cfg.eps_start, cfg.eps_end, cfg.eps_decay_steps)
                 while not done:
                     assert mask.any(), "all actions masked at s - env masking is broken"  # DoD guard
                     mask_legal_total += int(np.asarray(mask).sum())

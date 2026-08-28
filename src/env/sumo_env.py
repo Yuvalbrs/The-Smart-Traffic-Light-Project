@@ -37,6 +37,7 @@ NETWORK-GLOBAL - when the network is done, every agent terminates:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable
@@ -54,6 +55,8 @@ from src.env.intersection import (
 )
 from src.env.masking import barrier_crossing_mask, compute_mask
 from src.trace import JsonlWriter, MovementResolver, build_sim_frame
+
+_log = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _NET_FILE = _REPO_ROOT / "config" / "network" / "intersection.net.xml"
@@ -154,6 +157,7 @@ class SUMOEnv(gym.Env):
         gridlock_penalty_mu: float = 0.0,
         gridlock_queue_threshold: float = 20.0,
         enforce_max_red: bool = True,
+        strict_collisions: bool = False,
         sumo_seed: int = 42,
         use_gui: bool = False,
         movements_path: str | Path = _VAULT_MOVEMENTS,
@@ -190,6 +194,9 @@ class SUMOEnv(gym.Env):
         # the locked max_red_s bound was previously documented but unenforced.
         self._enforce_max_red = enforce_max_red
         self._red_margin_s = decision_interval_s  # fire a window early: switching costs time
+        # strict: raise on any collision (CI / sanity gate). Otherwise censor + terminate.
+        self._strict_collisions = strict_collisions
+        self._collision_detail: str | None = None
         # per-TLS, per-movement wall time of the last protected green
         self._last_green_time: dict[str, dict[str, float]] = {}
         self._gridlock_queue_threshold = gridlock_queue_threshold
@@ -340,6 +347,7 @@ class SUMOEnv(gym.Env):
             }
         self._sim_time = 0.0
         self._departed = self._arrived = self._collisions = 0
+        self._collision_detail = None
         # SUMO has already loaded the first vehicles before the first simulationStep, and
         # _tick only accumulates AFTER stepping, so those loads were lost. That made
         # insertion_backlog_fraction = (loaded-departed)/loaded go NEGATIVE (measured
@@ -633,8 +641,12 @@ class SUMOEnv(gym.Env):
         self._arrived += traci.simulation.getArrivedNumber()
         colliding = traci.simulation.getCollidingVehiclesNumber()
         if colliding:
-            # Fail LOUDLY. A collision means a right-of-way/physics modelling error —
-            # the class of bug that silently invalidated the entire first campaign.
+            # A collision means a right-of-way/physics modelling error - the class of bug
+            # that silently invalidated the first campaign - so it is never ignored. But
+            # HOW it is surfaced depends on the caller: `strict` (CI, the sanity gate)
+            # raises so a defect cannot slip through; otherwise the episode is recorded as
+            # collision-censored and terminated, because killing a 3-hour training run at
+            # episode 44 loses the run and teaches nothing that the flag does not.
             self._collisions += colliding
             def _veh(vid: str) -> str:
                 try:
@@ -649,11 +661,16 @@ class SUMOEnv(gym.Env):
                 f"{_veh(c.collider)} > {_veh(c.victim)} type={c.type} lane={c.lane} pos={c.pos:.1f}"
                 for c in traci.simulation.getCollisions()
             )
-            raise RuntimeError(
+            msg = (
                 f"SUMO reported {colliding} colliding vehicle(s) at t={self._sim_time:.0f}s "
                 f"[{detail}]. The environment model is wrong; investigate — do not "
                 "suppress (see decisions.md 2026-08-28)."
             )
+            if self._strict_collisions:
+                raise RuntimeError(msg)
+            _log.error("%s Episode terminated as collision-censored.", msg)
+            self._collision_detail = detail
+            return True  # terminate this episode; info["episode"] carries the flag
         if self._tracer is not None or self._on_frame is not None:
             frame = self._build_frame()  # one 1 Hz sim_frame per tick (single-agent)
             if self._tracer is not None:
@@ -718,6 +735,9 @@ class SUMOEnv(gym.Env):
                 "departed_count": self._departed,
                 "arrived_count": self._arrived,
                 "insertion_backlog_fraction": backlog,
-                "collision_count": self._collisions,  # 0 unless the RuntimeError was caught
+                "collision_count": self._collisions,
+                # an episode that hit a collision is not comparable to a clean one
+                "collision_censored": self._collisions > 0,
+                "collision_detail": self._collision_detail,
             }
         return info

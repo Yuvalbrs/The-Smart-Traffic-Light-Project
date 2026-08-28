@@ -27,11 +27,13 @@ from src.env.intersection import N_MOVEMENTS
 from src.ml.dqn import DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster
 
+from src.provenance.official import OFFICIAL_LSTM  # noqa: E402
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OUT_DIR = _REPO_ROOT / "data" / "lstm_dqn"
 _RUNS = _REPO_ROOT / "runs"
 _OFFICIAL_LSTM = (
-    _REPO_ROOT / "checkpoints" / "lstm" / "lstm__data-8eb28eecdefb__lstm-df67afd839d4.pt"
+    OFFICIAL_LSTM
 )
 SCENARIOS = ["SCN-01", "SCN-03", "SCN-04", "SCN-06"]
 SEEDS = [0, 1, 2, 3, 4]

@@ -108,21 +108,35 @@ def _wilcoxon(a: np.ndarray, b: np.ndarray):
     """Two-sided Wilcoxon signed-rank (Pratt zeros). Returns (p, median_diff, ci_lo, ci_hi, n)."""
     d = a - b
     n = len(d)
-    if n < 2 or np.allclose(d, 0.0):
+    if np.allclose(d, 0.0) and n >= 1:
+        # All differences exactly zero is an unambiguous NON-rejection (p = 1.0), not an
+        # untestable hypothesis. Returning NaN here dropped the test out of the Holm
+        # family, shrinking m and making every SURVIVING test easier to pass.
+        return 1.0, 0.0, 0.0, 0.0, n
+    if n < 2:
         return float("nan"), float(np.median(d)) if n else float("nan"), float("nan"), float("nan"), n
     try:
         _, p = wilcoxon(d, zero_method="pratt", alternative="two-sided")
     except ValueError:
         p = float("nan")
-    rng = np.random.default_rng(0)
+    # seed 42: the value recorded as this analysis's provenance in decisions.md and
+    # finish-plan.md ("bootstrap 95% CI B=2000 seed=42"). It was 0 here, so anyone
+    # reproducing from the recorded provenance got different CI bounds.
+    rng = np.random.default_rng(42)
     boots = [np.median(rng.choice(d, size=n, replace=True)) for _ in range(2000)]
     return float(p), float(np.median(d)), float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5)), n
 
 
-def _holm(pvals: list[float]) -> list[float]:
-    """Holm-Bonferroni adjusted p-values (NaNs pass through, excluded from m)."""
+def _holm(pvals: list[float], family_size: int | None = None) -> list[float]:
+    """Holm-Bonferroni adjusted p-values (NaNs pass through).
+
+    ``family_size`` pins ``m`` to the PRE-REGISTERED family size (21/7/7) rather than
+    letting it shrink to however many tests happened to be computable. Prereg s6 fixes
+    those sizes precisely to remove this degree of freedom: a data-dependent m makes the
+    correction weaker exactly when censoring has already degraded the evidence.
+    """
     idx = [i for i, p in enumerate(pvals) if not np.isnan(p)]
-    m = len(idx)
+    m = family_size if family_size is not None else len(idx)
     adj = [float("nan")] * len(pvals)
     order = sorted(idx, key=lambda i: pvals[i])
     running = 0.0
@@ -147,8 +161,13 @@ def _family(dqn, base, eval_seeds, scenario, a_variant, comparisons, title, line
             a, b, dropped = _pairs(dqn, base, eval_seeds, scenario, kpi, a_variant, b_name, b_is_dqn)
             p, med, lo, hi, n = _wilcoxon(a, b)
             results.append([klabel, blabel, direction, kpi in HEADLINE, p, med, lo, hi, n, dropped])
-    adj = _holm([r[4] for r in results])
-    lines.append(f"\n### {title}  (n target 15; Holm family size {sum(not np.isnan(r[4]) for r in results)})")
+    # m is the PRE-REGISTERED family size (every comparison x KPI in this family),
+    # not the count that happened to be computable.
+    adj = _holm([r[4] for r in results], family_size=len(results))
+    lines.append(
+        f"\n### {title}  (n target 15; Holm family size {len(results)} "
+        f"[pre-registered]; testable {sum(not np.isnan(r[4]) for r in results)})"
+    )
     lines.append("| KPI | vs | median d(hybrid-other) | 95% CI | n | drop | p_raw | p_holm | sig |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for r, pa in zip(results, adj):

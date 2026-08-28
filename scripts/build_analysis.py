@@ -57,7 +57,9 @@ _SEL_PLAIN_LOG = _REPO_ROOT / "runs" / "compare_sel_plain.log"
 _OUT_DIR = _REPO_ROOT / "data" / "eval" / "analysis"
 
 TEST_SCENARIO = "SCN-05"
-DEPLOYED_LSTM_VERSION = "lstm-df67afd839d4"
+from src.provenance.official import official_lstm_version
+
+DEPLOYED_LSTM_VERSION = official_lstm_version()  # derived, never hand-pinned
 HEADLINE_VARIANTS = ("hybrid", "plain", "random-lstm")
 BASELINE_ALGOS = ("webster", "max_pressure", "actuated")
 # Display order + labels for T1/T2 rows (baselines first, then the 3 DQN variants).
@@ -158,10 +160,14 @@ def build_confirmatory_family(
                 }
             )
     df = pd.DataFrame.from_records(records)
-    df["p_holm"] = _holm(df["p_raw"].tolist())
+    # Holm divides by the PRE-REGISTERED family size (21/7/7), not by however many tests
+    # survived censoring - a data-dependent m weakens the correction exactly when the
+    # evidence is already degraded (prereg s6).
+    df["p_holm"] = _holm(df["p_raw"].tolist(), family_size=len(df))
     df["stars"] = df["p_holm"].apply(_stars)
     df["significant"] = df["p_holm"].apply(lambda p: bool(p < ALPHA) if not np.isnan(p) else False)
-    df["family_size"] = int(df["p_raw"].notna().sum())
+    df["family_size"] = int(len(df))  # pre-registered size
+    df["family_testable"] = int(df["p_raw"].notna().sum())  # how many were computable
     return df
 
 

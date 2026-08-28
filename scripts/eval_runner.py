@@ -49,6 +49,7 @@ from src.env.sumo_env import SUMOEnv
 from src.metrics.kpi_extractor import EpisodeKPIs, extract_kpis
 from src.ml.dqn import OBS_DIM, DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster, random_forecaster
+from src.provenance.official import OFFICIAL_LSTM
 from src.provenance.records import record_experiment_run
 from src.provenance.versions import git_sha, sumo_version
 from src.scenarios.config import SCENARIO_DIR, Scenario, load_all, load_scenario
@@ -57,11 +58,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
 _OUT_DIR = _REPO_ROOT / "data" / "eval"
 _DEFAULT_DB = _REPO_ROOT / "data" / "traffic.db"
-_OFFICIAL_LSTM = (
-    # retrained on post-gridlock-fix data, SS@60=0.081 SHIP_WITH_CAVEAT
-    # (decisions.md 2026-08-28); must match train_matrix._OFFICIAL_LSTM
-    _REPO_ROOT / "checkpoints" / "lstm" / "lstm__data-aa6ef4458cda__lstm-f70dca8c6ff1.pt"
-)
+_OFFICIAL_LSTM = OFFICIAL_LSTM  # single source of truth: src/provenance/official.py
 # The pre-registered confirmatory scenario set (prereg s2). SCN-05 is the held-out
 # test regime; SCN-01..03 are the training regimes; SCN-04 is the interpolation check.
 CONFIRMATORY_SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")

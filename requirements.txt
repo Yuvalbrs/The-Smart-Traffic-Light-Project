@@ -27,7 +27,11 @@ ipykernel       # the python3 kernel the notebook executes against
 
 # Presentation layer (T-05-01/04): the FastAPI hub, its WebSocket channels and REST replay.
 fastapi         # the hub itself (src/api/server.py)
+pydantic        # request/response models in src/api/server.py. A DIRECT import that was
+                # declared nowhere and installed only as a transitive dep of fastapi -
+                # i.e. it worked by accident, not by contract.
 uvicorn         # ASGI server: python -m uvicorn src.api.server:app
 websockets      # WebSocket protocol support for uvicorn
 httpx           # test client transport (TestClient) - test-only, but import-time required
+pytest          # the suite itself; previously arrived only via pytest-asyncio
 pytest-asyncio  # the async hub/backpressure tests

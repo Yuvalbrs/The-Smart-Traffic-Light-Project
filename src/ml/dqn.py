@@ -242,12 +242,25 @@ class DQNAgent:
         legal = torch.nonzero(mask_t, as_tuple=False).flatten()
         if legal.numel() == 0:
             raise ValueError("action mask forbids all actions")
-        if self._rng.random() < epsilon:
+        # Short-circuit on epsilon == 0: drawing first meant every greedy validation
+        # episode advanced the EXPLORATION rng (~1800 draws per validation), so changing
+        # --validation-every silently changed the training trajectory. Validation must
+        # not perturb training.
+        if epsilon > 0.0 and self._rng.random() < epsilon:
             return int(legal[self._rng.randrange(legal.numel())].item())
         with torch.no_grad():
             obs_a = np.asarray(obs)
             obs_t = torch.as_tensor(obs_a, dtype=torch.float32, device=self.device).unsqueeze(0)
             scores = self._action_scores(obs_t).squeeze(0)  # (n_actions,) mean-Q or CVaR_alpha
+            # A NaN cannot leak an ILLEGAL action (masked_fill overwrites those), but it
+            # would make argmax return an arbitrary legal one - silently, forever. The
+            # policy degrades to a fixed-phase controller with no health signal, so a
+            # non-finite score is an error, not something to route around.
+            if not torch.isfinite(scores[mask_t]).all():
+                raise ValueError(
+                    "non-finite Q-values over legal actions; the network has diverged "
+                    f"(scores={scores.tolist()})"
+                )
             scores = scores.masked_fill(~mask_t, _MASK_FILL)
             return int(scores.argmax().item())
 

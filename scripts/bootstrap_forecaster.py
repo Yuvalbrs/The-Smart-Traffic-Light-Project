@@ -33,7 +33,9 @@ from src.ml.lstm_model import LSTMForecaster, skill_scores
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DQN_DIR = _REPO_ROOT / "data" / "lstm_dqn"
 _CKPT_DIR = _REPO_ROOT / "checkpoints" / "lstm"
-_OFFICIAL = _CKPT_DIR / "lstm__data-8eb28eecdefb__lstm-df67afd839d4.pt"
+from src.provenance.official import OFFICIAL_LSTM
+
+_OFFICIAL = OFFICIAL_LSTM
 
 
 def _files(*scn_nums: str) -> list[Path]:

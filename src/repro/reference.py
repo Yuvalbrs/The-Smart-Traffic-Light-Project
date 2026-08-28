@@ -59,6 +59,9 @@ def compute_reference_hash() -> dict[str, Any]:
             episode_length_s=REFERENCE_LENGTH_S,
             sumo_seed=REFERENCE_SEED,
             trace_path=trace,
+            # the repro gate is a correctness check: a collision here is a defect, not a
+            # censored episode, so it must raise rather than terminate quietly
+            strict_collisions=True,
         )
         try:
             obs, info = env.reset()

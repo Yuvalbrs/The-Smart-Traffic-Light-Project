@@ -28,6 +28,7 @@ class _StubSession:
         self._alive = False
         self.started = False
         self.stopped = False
+        self.stop_hangs = False  # set True to simulate a worker that will not unwind
 
         class _Status:
             def as_dict(_self) -> dict:
@@ -39,9 +40,13 @@ class _StubSession:
         self.started = True
         self._alive = True
 
-    def stop(self, timeout: float = 20.0) -> None:
+    def stop(self, timeout: float = 20.0) -> bool:
+        """Mirror LiveSession.stop: returns whether the worker actually finished."""
         self.stopped = True
+        if self.stop_hangs:  # simulate a worker stuck in a native SUMO call
+            return False
         self._alive = False
+        return True
 
     @property
     def alive(self) -> bool:
@@ -115,6 +120,25 @@ def test_stopping_frees_the_slot(client) -> None:
     assert client.post("/sessions", json={"controller": "webster"}).status_code == 201
     assert client.delete("/sessions/current").status_code == 204
     assert client.post("/sessions", json={"controller": "actuated"}).status_code == 201
+
+
+def test_stop_reports_202_when_the_worker_has_not_unwound(client) -> None:
+    """A stop that did not actually stop must not report 204.
+
+    The worker can be inside a long native SUMO call rather than the interruptible
+    pacing wait, and Python threads cannot be killed. Reporting a clean stop we did
+    not achieve hides a still-running simulation from the operator
+    (decisions.md 2026-08-28).
+    """
+    assert client.post("/sessions", json={"controller": "webster"}).status_code == 201
+    current = client.app.state.sessions.current
+    current.stop_hangs = True  # worker will not unwind within the join timeout
+
+    resp = client.delete("/sessions/current")
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "stopping"
+    # the slot is NOT freed, because the old session still holds the TraCI connection
+    assert client.post("/sessions", json={"controller": "actuated"}).status_code == 409
 
 
 def test_manager_raises_session_busy(monkeypatch) -> None:

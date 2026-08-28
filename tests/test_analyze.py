@@ -38,8 +38,15 @@ def test_wilcoxon_clear_shift_is_significant():
     assert p < 0.05
 
 
-def test_wilcoxon_all_zero_diff_returns_nan_p():
+def test_wilcoxon_all_zero_diff_is_non_rejection_not_untestable():
+    """Identical samples give p = 1.0, not NaN (decisions.md 2026-08-28).
+
+    NaN dropped the test out of its Holm family, shrinking m and thereby making
+    every SURVIVING test in that family easier to pass. No difference at all is an
+    unambiguous NON-rejection, which is exactly what p = 1.0 states.
+    """
     a = np.array([1.0, 2, 3])
-    p, med, _lo, _hi, n = _wilcoxon(a, a.copy())
-    assert math.isnan(p)  # no difference -> undefined, not a spurious significance
-    assert med == 0.0
+    p, med, lo, hi, n = _wilcoxon(a, a.copy())
+    assert not math.isnan(p) and p == 1.0
+    assert med == 0.0 and lo == 0.0 and hi == 0.0
+    assert n == 3

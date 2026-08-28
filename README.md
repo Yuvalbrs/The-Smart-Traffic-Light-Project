@@ -12,8 +12,38 @@ Positioned as **replication-plus-adaptation** of MPLight (Chen et al., 2020) —
 
 ## Status
 
-Skeleton scaffolded. First implementation task is **T-00-01** (the trivial end-to-end SUMO↔Python
-loop) — not yet started. Nothing else begins until it passes.
+**Implementation complete; results are being re-run.** The simulator, the DQN training stack,
+the evaluation campaign, the FastAPI hub, the React dashboard and the Unity 3-D client are all
+built and tested (295 tests). What is *not* current is the numbers.
+
+On 2026-08-28 a 3-D rendering of the simulation exposed a right-of-way defect. Pulling that
+thread uncovered four independent modelling defects plus a safety bound that was specified but
+never enforced — each invisible to the test suite, and together enough to invalidate every
+result the project had produced. All are fixed and regression-tested; the training matrix,
+evaluation campaign and statistical analysis are being re-run on the corrected environment.
+
+Do not cite any number from `data/eval/` or the analysis notebook until that re-run lands. The
+full account, with evidence and the remaining work, is in the vault's `decisions.md` (entries
+dated 2026-08-28) and `hot.md`.
+
+## Layout
+
+```
+src/env/         SUMO gym environment, the 12-movement / 8-phase model, safety masking
+src/ml/          DQN agent, training loop, replay buffer, frozen LSTM forecaster + wrapper
+src/baselines/   Webster fixed-time, max-pressure, SUMO actuated
+src/metrics/     KPI extraction from trip-info + traces
+src/api/         FastAPI hub: live sessions, WebSocket fan-out, REST replay
+src/db/          SQLite (WAL) results schema
+src/trace/       JSONL frame writer + the sim_frame contract
+src/provenance/  version hashing; the single source of truth for the deployed forecaster
+src/repro/       the golden-hash reproducibility gate
+src/scenarios/   scenario definitions and loading
+scripts/         network/route builders, training, evaluation, analysis (each has a `Run::` docstring)
+frontend/        React + Vite dashboard (`npm run dev` -> :5173)
+unity/           Unity 6 3-D client (see `unity/README.md`)
+tests/           295 tests
+```
 
 ## Requirements
 
@@ -40,21 +70,3 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 python -c "import torch; print(torch.cuda.is_available())"   # expect True
 ```
 
-## Layout
-
-```
-smart-traffic-rl/
-├── CLAUDE.md          # permanent project rules (read every session)
-├── README.md
-├── requirements.txt
-├── pyproject.toml     # black (line 100), ruff, pytest
-├── docs/              # signpost only -> spec lives in the Obsidian vault
-├── config/            # SUMO net/route/cfg + scenario YAMLs
-├── scripts/           # entry points (e.g. python -m scripts.vertical_slice)
-├── src/
-│   └── env/           # SUMO env + TraCI bridge (built per task, not yet)
-└── tests/
-```
-
-More directories (`src/ml`, `src/baselines`, `src/data`, `src/api`, `src/metrics`, `frontend/`,
-`unity/`) are added as later tasks reach them — see the master task list in the vault.

@@ -18,6 +18,7 @@ replayable through the same REST endpoints as the recorded corpus. Live rows are
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -36,6 +37,11 @@ import traci  # noqa: F401  (side-effecting import: selects the libsumo backend)
 
 from src.api.hub import Hub
 from src.api.wire import dashboard_frame
+
+# There was no logger anywhere in the service layer: a failed run's cause lived in one
+# in-memory string that the next session start overwrote, and failed runs were excluded
+# from persistence - so the evidence was gone twice over.
+_log = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_TRACE_DIR = _REPO_ROOT / "data" / "live"
@@ -187,11 +193,25 @@ class LiveSession:
         self._thread = threading.Thread(target=self._run, name="sumo-live", daemon=True)
         self._thread.start()
 
-    def stop(self, timeout: float = 20.0) -> None:
-        """Ask the episode to end and wait for the worker to unwind."""
+    def stop(self, timeout: float = 20.0) -> bool:
+        """Ask the episode to end and wait for the worker to unwind.
+
+        Returns whether the worker actually finished. It may not: the thread can be
+        inside a long native ``simulationStep`` rather than the interruptible pacing
+        wait, and Python threads cannot be killed. Reporting a clean stop we did not
+        achieve is worse than reporting the truth, so the caller gets the real answer.
+        """
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
+        if self._thread is None:
+            return True
+        self._thread.join(timeout=timeout)
+        stopped = not self._thread.is_alive()
+        if not stopped:
+            _log.warning(
+                "run %s did not stop within %.0fs; worker still alive "
+                "(likely inside a native SUMO call)", self.status.run_id, timeout
+            )
+        return stopped
 
     @property
     def alive(self) -> bool:
@@ -373,6 +393,13 @@ class LiveSession:
         except Exception as exc:  # surface it in /sessions/current rather than dying silently
             self.status.state = "failed"
             self.status.error = repr(exc)
+            # The in-memory error string is erased by the next session start, so without
+            # this the only record of WHY a run died is gone. Collisions now raise from
+            # the env, which makes this path live rather than theoretical.
+            _log.exception(
+                "live run %s failed (%s scenario=%s seed=%s)",
+                self.status.run_id, self.controller, self.scenario, self.seed,
+            )
         finally:
             self.status.finished_at = time.time()
             if env is not None:
@@ -381,11 +408,15 @@ class LiveSession:
                 except Exception:  # pragma: no cover - close is best-effort
                     pass
             self._env = None
-            if self._trace and self.status.state in ("finished", "stopped"):
+            # A failed run is persisted too (KPIs stay NULL): excluding it meant a crashed
+            # run left no DB row, so its on-disk trace was undiscoverable through the API
+            # and the failure was invisible the moment a new session started.
+            if self._trace and self.status.state in ("finished", "stopped", "failed"):
                 try:
                     self._persist()
                 except Exception as exc:  # provenance failure must not mask a good run
                     self.status.error = "persist failed: " + repr(exc)
+                    _log.exception("persist failed for run %s", self.status.run_id)
 
     def _compute_kpis(self) -> Any | None:
         """Extract this episode's KPIs, or ``None`` when they would not be meaningful.
@@ -526,11 +557,15 @@ class SessionManager:
             session.start()
             return session
 
-    def stop(self) -> bool:
-        """Stop the running session. Returns ``False`` if there was nothing to stop."""
+    def stop(self) -> bool | None:
+        """Stop the running session.
+
+        ``False`` - nothing was running. ``True`` - the worker actually finished.
+        ``None`` - the stop was requested but the worker is still unwinding, so the
+        caller must not claim it stopped (it previously always returned ``True``).
+        """
         with self._lock:
             session = self._current
             if session is None or not session.alive:
                 return False
-            session.stop()
-            return True
+            return True if session.stop() else None

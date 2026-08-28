@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -172,11 +172,26 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
             raise HTTPException(status_code=404, detail="no session has been started")
         return session.status.as_dict()
 
-    @app.delete("/sessions/current", status_code=204)
-    def stop_session() -> None:
-        """Stop the running session."""
-        if not app.state.sessions.stop():
+    @app.delete("/sessions/current")
+    def stop_session(response: Response) -> dict[str, Any] | None:
+        """Stop the running session.
+
+        204 when the worker actually stopped; 202 when the stop was accepted but the
+        worker is still unwinding (it can be inside a long native SUMO call, and Python
+        threads cannot be killed). Reporting 204 unconditionally, as this did before,
+        told the operator the simulation had stopped when it had not.
+        """
+        outcome = app.state.sessions.stop()
+        if outcome is False:
             raise HTTPException(status_code=404, detail="no session is running")
+        if outcome is None:
+            response.status_code = 202
+            return {
+                "status": "stopping",
+                "detail": "stop requested; the worker has not finished yet",
+            }
+        response.status_code = 204
+        return None
 
     async def _pump(websocket: WebSocket, hub: Hub, name: str) -> None:
         """Relay one hub's frames to one client until it disconnects."""
