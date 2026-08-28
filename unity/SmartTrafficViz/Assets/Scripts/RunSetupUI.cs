@@ -39,97 +39,118 @@ namespace SmartTraffic
 
         private static readonly float[] Speeds = { 1f, 2f, 5f, 10f, 0f };
 
-        public const float PanelWidth = 560f;
-        public const float PanelHeight = 476f;
+        // Layout constants. The panel height is DERIVED from these rather than guessed, because a
+        // guessed height is what pushed the run button off the bottom of the panel before.
+        private const float Pad = 24f;      // panel inset
+        private const float Gap = 7f;       // between buttons in a group
+        private const float Section = 16f;  // between groups
+        private const float HeadH = 22f;
+        private const float RowH = 32f;
+        private const float RunH = 40f;
+
+        public const float PanelWidth = 660f;
+
+        public static float PanelHeight =>
+            Pad
+            + HeadH + Gap + Scenes.Length * (RowH + Gap) + Section        // scenes
+            + HeadH + Gap + 2f * (RowH + Gap) + Section                   // controllers (2 rows)
+            + HeadH + Gap + (RowH + Gap) + Section                        // speed
+            + 20f + 22f + 18f + Gap                                       // seed, status, error
+            + RunH + Pad;
 
         /// <summary>Draws the picker. Returns true if the user asked to run something.</summary>
         public static bool Draw(Rect box, ref RunConfig cfg, SessionControl session, bool showStop)
         {
             GUI.Box(box, GUIContent.none, UITheme.Panel);
-            var x = box.x + 20f;
-            var w = box.width - 40f;
-            var y = box.y + 16f;
+            var x = box.x + Pad;
+            var w = box.width - Pad * 2f;
+            var y = box.y + Pad;
             var run = false;
 
-            GUI.Label(new Rect(x, y, w, 24f), "SCENE  (traffic scenario)", UITheme.Heading);
-            y += 26f;
+            GUI.Label(new Rect(x, y, w, HeadH), "SCENE   traffic scenario", UITheme.Heading);
+            y += HeadH + Gap;
 
             foreach (var scene in Scenes)
             {
                 var on = cfg.Scenario == scene.Id;
-                var label = scene.Id + "   " + scene.Name + "      " + scene.Blurb;
-                if (GUI.Button(new Rect(x, y, w, 30f), label, on ? UITheme.ButtonOn : UITheme.Button))
+                var row = new Rect(x, y, w, RowH);
+                // Button first as the background, then the text in fixed columns on top. A single
+                // centred caption made every row start at a different x, so nothing lined up.
+                if (GUI.Button(row, GUIContent.none, on ? UITheme.ButtonOn : UITheme.Button))
                 {
                     cfg.Scenario = scene.Id;
                 }
-                y += 33f;
+                GUI.Label(new Rect(row.x + 14f, row.y, 66f, RowH), scene.Id, UITheme.CellId(on));
+                GUI.Label(new Rect(row.x + 88f, row.y, 132f, RowH), scene.Name, UITheme.CellName(on));
+                GUI.Label(new Rect(row.x + 228f, row.y, w - 242f, RowH), scene.Blurb,
+                    UITheme.CellBlurb(on));
+                y += RowH + Gap;
             }
 
-            y += 8f;
-            GUI.Label(new Rect(x, y, w, 24f), "CONTROLLER  (who drives the lights)", UITheme.Heading);
-            y += 26f;
+            y += Section - Gap;
+            GUI.Label(new Rect(x, y, w, HeadH), "CONTROLLER   who drives the lights", UITheme.Heading);
+            y += HeadH + Gap;
 
             const int perRow = 3;
-            var bw = (w - 8f * (perRow - 1)) / perRow;
+            var bw = (w - Gap * (perRow - 1)) / perRow;
             for (var i = 0; i < Controllers.Length; i++)
             {
-                var col = i % perRow;
-                var row = i / perRow;
                 var on = cfg.Controller == Controllers[i];
-                var r = new Rect(x + col * (bw + 8f), y + row * 34f, bw, 30f);
+                var r = new Rect(x + i % perRow * (bw + Gap), y + i / perRow * (RowH + Gap), bw, RowH);
                 if (GUI.Button(r, Controllers[i], on ? UITheme.ButtonOn : UITheme.Button))
                 {
                     cfg.Controller = Controllers[i];
                 }
             }
-            y += 34f * Mathf.Ceil(Controllers.Length / (float)perRow) + 10f;
+            y += 2f * (RowH + Gap) + Section - Gap;
 
-            GUI.Label(new Rect(x, y, w, 22f), "SPEED  (simulated seconds per real second)", UITheme.Heading);
-            y += 24f;
-            var sw = (w - 8f * (Speeds.Length - 1)) / Speeds.Length;
+            GUI.Label(new Rect(x, y, w, HeadH), "SPEED   simulated seconds per real second",
+                UITheme.Heading);
+            y += HeadH + Gap;
+
+            var sw = (w - Gap * (Speeds.Length - 1)) / Speeds.Length;
             for (var i = 0; i < Speeds.Length; i++)
             {
                 var on = Mathf.Approximately(cfg.Speed, Speeds[i]);
                 var label = Speeds[i] <= 0f ? "as fast" : Speeds[i] + "x";
-                if (GUI.Button(new Rect(x + i * (sw + 8f), y, sw, 28f), label,
+                if (GUI.Button(new Rect(x + i * (sw + Gap), y, sw, RowH), label,
                         on ? UITheme.ButtonOn : UITheme.Button))
                 {
                     cfg.Speed = Speeds[i];
                 }
             }
-            y += 36f;
+            y += RowH + Gap + Section - Gap;
 
             GUI.Label(new Rect(x, y, w, 20f),
-                "seed " + cfg.Seed + "   -   same seed + same scene = identical traffic, " +
-                "which is what makes two controllers comparable", UITheme.Hint);
-            y += 26f;
+                "seed " + cfg.Seed + "   -   same seed and scene means identical traffic",
+                UITheme.Hint);
+            y += 20f;
 
             var status = session == null
                 ? ""
                 : "session: " + session.State + "   " + session.RunningController + " on " +
                   session.RunningScenario + "   sim " + session.SimTime.ToString("F0") + " s";
-            GUI.Label(new Rect(x, y, w, 20f), status, UITheme.Label);
-            y += 24f;
+            GUI.Label(new Rect(x, y, w, 22f), status, UITheme.Label);
+            y += 22f;
 
             if (session != null && session.LastError != null)
             {
                 var err = new GUIStyle(UITheme.Hint);
                 err.normal.textColor = new Color(1f, 0.45f, 0.4f);
-                GUI.Label(new Rect(x, y, w, 20f), session.LastError, err);
+                GUI.Label(new Rect(x, y, w, 18f), session.LastError, err);
             }
-            y += 22f;
+            y += 18f + Gap;
 
             var busy = session != null && session.Busy;
             GUI.enabled = !busy;
-            var runW = showStop ? w * 0.62f : w;
-            if (GUI.Button(new Rect(x, y, runW, 36f),
-                    busy ? "working..." : "RUN  " + cfg.Scenario + "  /  " + cfg.Controller,
+            var runW = showStop ? w - 130f - Gap : w;
+            if (GUI.Button(new Rect(x, y, runW, RunH),
+                    busy ? "working..." : "RUN   " + cfg.Scenario + "   /   " + cfg.Controller,
                     UITheme.ButtonOn))
             {
                 run = true;
             }
-            if (showStop && GUI.Button(new Rect(x + runW + 8f, y, w - runW - 8f, 36f),
-                    "Stop", UITheme.Button))
+            if (showStop && GUI.Button(new Rect(x + runW + Gap, y, 130f, RunH), "Stop", UITheme.Button))
             {
                 session?.Stop();
             }

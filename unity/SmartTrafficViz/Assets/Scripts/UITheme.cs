@@ -80,6 +80,43 @@ namespace SmartTraffic
             _hint.normal.textColor = Dim;
         }
 
+        private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn;
+
+        private static void EnsureCells()
+        {
+            Ensure();
+            if (_cellId != null) return;
+
+            _cellId = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 13, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft,
+            };
+            _cellId.normal.textColor = Ink;
+
+            _cellIdOn = new GUIStyle(_cellId);
+            _cellIdOn.normal.textColor = Color.white;
+
+            _cellName = new GUIStyle(_cellId) { fontStyle = FontStyle.Normal };
+            _cellName.normal.textColor = Ink;
+
+            _cellNameOn = new GUIStyle(_cellName);
+            _cellNameOn.normal.textColor = Color.white;
+
+            _cellBlurb = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 12, alignment = TextAnchor.MiddleLeft,
+            };
+            _cellBlurb.normal.textColor = Dim;
+
+            _cellBlurbOn = new GUIStyle(_cellBlurb);
+            _cellBlurbOn.normal.textColor = new Color(0.82f, 0.90f, 1f);
+        }
+
+        /// <summary>Left-aligned row cells, so a list of buttons reads as aligned columns.</summary>
+        public static GUIStyle CellId(bool on) { EnsureCells(); return on ? _cellIdOn : _cellId; }
+        public static GUIStyle CellName(bool on) { EnsureCells(); return on ? _cellNameOn : _cellName; }
+        public static GUIStyle CellBlurb(bool on) { EnsureCells(); return on ? _cellBlurbOn : _cellBlurb; }
+
         public static GUIStyle Button { get { Ensure(); return _button; } }
         public static GUIStyle ButtonOn { get { Ensure(); return _buttonOn; } }
         public static GUIStyle Panel { get { Ensure(); return _panel; } }
