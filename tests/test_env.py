@@ -254,11 +254,64 @@ def test_anti_starvation_bounds_red_time(tmp_path) -> None:
             worst = max(worst, max(t - last_green[m] for m in controlled))
             if term or trunc:
                 break
-        # unenforced this was the full episode; the bound plus one decision window and
-        # the yellow/all-red clearance is the achievable floor at a 10 s granularity
-        assert worst <= ix.max_red_s + 3 * env._decision_interval_s, (
+        # The guarantee is max_red_s + ONE decision interval: a movement can cross the
+        # threshold immediately after a decision and must then wait one full window.
+        # The tolerance is deliberately NOT written as a multiple of max_red_s - the
+        # previous `+ 3 * interval` form scaled with the bound under test, so amending
+        # max_red_s 60 -> 120 silently loosened this assertion from 90 s to 150 s.
+        assert worst <= ix.max_red_s + env._decision_interval_s, (
             f"worst red {worst}s exceeds the enforceable bound "
-            f"({ix.max_red_s}s + clearance); anti-starvation is not binding"
+            f"({ix.max_red_s}s + one {env._decision_interval_s}s window); "
+            "anti-starvation is not binding"
+        )
+    finally:
+        env.close()
+
+
+def test_anti_starvation_survives_the_tie_break(tmp_path) -> None:
+    """Starvation must bind against a TIE-INDUCING adversary, not just an axis-clinger.
+
+    ``test_anti_starvation_bounds_red_time`` only clings to the NS group, which never
+    makes two movements reach the bound together, so it passed at both 60 s and 120 s
+    while the true worst case was 160 s. Three separate defects produced that:
+      * ``max()`` broke red-time ties by movement id, so the higher-indexed member of a
+        tie (M7, M9, M10) was systematically shorted;
+      * a phase serving BOTH tied movements existed (phase 0 serves M1 and M7) but the
+        mask also permitted one serving only the winner, and the policy took it;
+      * the trigger margin was one decision window, which covers only ONE pending
+        service, while three movements were queued behind the bound.
+    This adversary prefers phases {2, 6} - it voluntarily serves M0/M1 and M3/M4 and
+    never M6/M7/M9/M10 - which is the pattern that produced the 160 s breach.
+    """
+    from scripts.build_routes import write_routes
+    from src.scenarios.config import load_all
+
+    scn = next(s for s in load_all() if s.id == "SCN-02")
+    route = write_routes(scn, 0, out_dir=tmp_path)
+    env = SUMOEnv(route, episode_length_s=1800)
+    try:
+        _, info = env.reset()
+        tls = env._tls_id
+        ix = env._intersections[tls]
+        controlled = [m for m in ix.movement_ids if m not in ix.free_movements]
+        worst, worst_m = 0.0, None
+        for _ in range(180):
+            mask = info["mask"]
+            assert mask.any(), "mask must never be empty"
+            action = next((a for a in (2, 6) if mask[a]), int(np.flatnonzero(mask)[0]))
+            _, _, term, trunc, info = env.step(action)
+            # measured from the ENV's own bookkeeping, not a re-derivation in the test
+            t = info["sim_time"]
+            served = env._last_green_time[tls]
+            for m in controlled:
+                red = t - served.get(m, 0.0)
+                if red > worst:
+                    worst, worst_m = red, m
+            if term or trunc:
+                break
+        assert worst <= ix.max_red_s + env._decision_interval_s, (
+            f"tie-break adversary starved {worst_m} for {worst}s against a "
+            f"{ix.max_red_s}s bound; anti-starvation is not binding under ties"
         )
     finally:
         env.close()
@@ -289,15 +342,25 @@ def test_gym_api_and_observation_contract(tmp_path) -> None:
 
 
 def test_reward_isolates_switch_penalty_on_empty_network(tmp_path) -> None:
-    """With no vehicles (pressure 0), reward == 0 for a hold and -lambda for a switch."""
+    """With no vehicles (pressure 0), reward == 0 for a hold and -lambda for a switch.
+
+    Expressed against ``_REWARD_SCALE`` rather than the literal -0.1: the scale is a
+    presentation choice (a positive linear rescale preserves the argmax policy), so a
+    test that hardcoded the scaled value would fail for the wrong reason the next time
+    it is tuned, and would not notice the penalty being dropped from the rescale.
+    """
+    from src.env.sumo_env import _REWARD_SCALE
+
     route = _write_route(tmp_path / "r.rou.xml", [("v0", 500.0, 1, "n_t t_s")])
     env = SUMOEnv(route, episode_length_s=60, switch_penalty=0.1)
     try:
         env.reset()  # applies phase 0; last_action = 0
         _, r_hold, *_ = env.step(0)  # same action, empty -> exactly 0.0
         assert r_hold == pytest.approx(0.0)
-        _, r_switch, *_ = env.step(1)  # switched, still empty -> exactly -0.1
-        assert r_switch == pytest.approx(-0.1)
+        _, r_switch, *_ = env.step(1)  # switched, still empty -> -lambda, scaled
+        assert r_switch == pytest.approx(-0.1 * _REWARD_SCALE)
+        # the scale must apply to the WHOLE reward, penalty included - not just pressure
+        assert r_switch != pytest.approx(-0.1)
     finally:
         env.close()
 

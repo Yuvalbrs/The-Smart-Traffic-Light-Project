@@ -61,7 +61,11 @@ _MASK_FILL = -1e9  # forbidden-action sentinel (algorithm-choice.md uses -1e9, n
 N_COS = 64  # cosine basis size for the quantile (tau) embedding (Dabney et al. 2018)
 N_QUANTILES = 8  # tau samples per state in the quantile-Huber loss (current AND target; N=N')
 K_POLICY = 32  # tau samples for CVaR action-selection (a fixed midpoint grid -> deterministic)
-HUBER_KAPPA = 1.0  # quantile-Huber threshold
+HUBER_KAPPA = 1.0  # quantile-Huber threshold (IQN / distributional path ONLY)
+# Separate constant for the scalar TD path. These were briefly the same symbol; editing
+# one for the plain DQN would have silently changed the IQN's loss, and the two track
+# different quantities (TD-error scale here, quantile-regression kappa there).
+TD_HUBER_BETA = 1.0
 
 
 class QNetwork(nn.Module):
@@ -352,7 +356,24 @@ class DQNAgent:
         else:
             target = self._td_target(batch)
             q = self.online(batch.obs).gather(1, batch.action.unsqueeze(1)).squeeze(1)
-            loss = F.mse_loss(q, target)
+            # Huber, not MSE (amended 2026-08-30, decisions.md). MEASURED, not assumed:
+            # global-norm clipping fired on 99.996% of 2.86M logged updates (median
+            # overshoot 1759x, p99 28300x). A clip that always fires rescales each update
+            # by grad_clip/||g||, i.e. it DIVIDES by the batch's own error magnitude,
+            # systematically down-weighting exactly the largest-TD-error transitions -
+            # the gridlock events the agent most needs to learn from.
+            #
+            # beta MUST track the TD-error scale, not the reward scale. Huber's gradient
+            # is CONSTANT beyond beta, so if beta sits far below the typical error the
+            # loss degenerates to mean|delta| - pure L1, which fits the conditional
+            # MEDIAN while Q is defined as a conditional EXPECTATION, and the bimodal
+            # gridlock tail is exactly what a median discards. Measured on real
+            # checkpoints under the OLD unscaled reward, Huber(beta=1) returned an
+            # identical gradient (366.3) for TD errors of 1, 10, 100 and 1000, against a
+            # real RMS TD error of 37-105: ~100% saturated. beta=1 is correct ONLY
+            # because _REWARD_SCALE now puts the reward at ~1e0 (median -0.36/step) and
+            # TD errors at O(1). If the reward scale changes, this must change with it.
+            loss = F.smooth_l1_loss(q, target, beta=TD_HUBER_BETA)
         self.optimizer.zero_grad()
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(self.online.parameters(), self.grad_clip)

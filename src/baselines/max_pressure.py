@@ -25,13 +25,8 @@ from src.env.intersection import (
     N_PHASES,
     _VAULT_MOVEMENTS,
     load_phase_movements,
+    unsquash_pressures,
 )
-
-# The 12 observation pressures are clipped to +/-10 then /10 into [-1, 1]
-# (state-space.md; SUMOEnv._PRESSURE_CLIP). Multiplying back recovers the clipped
-# vehicle-count scale. argmax is scale-invariant, so this is for readability /
-# spec-fidelity, not correctness.
-_PRESSURE_SCALE = 10.0
 
 
 class MaxPressureController:
@@ -67,7 +62,18 @@ class MaxPressureController:
         the lowest action index (``np.argmax``), as documented in
         baselines-implementation.md.
         """
-        pressures = np.asarray(state[:N_MOVEMENTS], dtype=np.float64) * _PRESSURE_SCALE
+        # Invert the observation squash to recover true vehicle-count pressures.
+        # This used to be `state[:12] * 10.0`, justified as "argmax is scale-invariant,
+        # so this is for readability, not correctness". Scale-invariance held; CLIP-
+        # invariance did not. The old observation clipped at +/-10, and 26.9-33.3% of
+        # dims saturated under congestion, so this baseline's argmax degraded toward
+        # np.argmax's low-index tiebreak exactly when the junction was busiest - i.e.
+        # max-pressure was crippled in precisely the regime the comparison is about, and
+        # "we beat max-pressure" would have meant beating a hobbled baseline. tanh is
+        # monotone but NONLINEAR, so summing squashed values across a phase does not
+        # preserve the ordering of summed raw pressures; the inverse is required, not
+        # optional. See decisions.md 2026-08-30.
+        pressures = unsquash_pressures(state[:N_MOVEMENTS])
         scores = np.full(N_PHASES, -np.inf, dtype=np.float64)
         for action, movements in self._action_movements.items():
             if mask[action]:

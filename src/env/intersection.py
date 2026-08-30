@@ -62,6 +62,34 @@ def load_phase_movements(
     return {int(p): tuple(index[m] for m in phases[p]["green"]) for p in phases}
 
 
+
+# --- observation squashing (single definition; see decisions.md 2026-08-30) ----------
+# The observation used to clip pressure to +/-10 then divide by 10. Measured live, that
+# pinned 26.9% of the 12 dims at exactly +/-1.0 (33.3% in the worst-10% reward states)
+# with |pressure| reaching 36, making congested and gridlocked states OBSERVATIONALLY
+# IDENTICAL. tanh is monotone everywhere so ordering survives at every magnitude, and it
+# stays strictly inside (-1, 1) so the Box(-1, 1) observation contract still holds.
+# These live here, beside `pressures()`, so the env and the max-pressure baseline cannot
+# drift apart about what an observation means.
+PRESSURE_SCALE = 20.0  # tanh(10/20)=0.46, tanh(20/20)=0.76, tanh(36/20)=0.95
+_TANH_LIMIT = 0.999999  # float32-safe: arctanh(0.999999)*20 ~= 145 veh, well past reality
+
+
+def squash_pressures(pressures: "np.ndarray") -> "np.ndarray":
+    """Map raw movement pressures into (-1, 1), monotonically and without clipping."""
+    return np.tanh(np.asarray(pressures, dtype=np.float64) / PRESSURE_SCALE)
+
+
+def unsquash_pressures(squashed: "np.ndarray") -> "np.ndarray":
+    """Exact inverse of :func:`squash_pressures`.
+
+    Needed because tanh is monotone but NONLINEAR: summing squashed values across a
+    phase's movements does not preserve the ordering of the summed raw pressures, so a
+    max-pressure controller reading the observation must invert the transform first.
+    """
+    z = np.clip(np.asarray(squashed, dtype=np.float64), -_TANH_LIMIT, _TANH_LIMIT)
+    return np.arctanh(z) * PRESSURE_SCALE
+
 class Intersection:
     """Movements, phases, pressure, and per-action green-state for one TLS."""
 
@@ -81,7 +109,7 @@ class Intersection:
         all_red_s: int,
         min_green_s: int,
         max_green_s: int,
-        max_red_s: int = 60,
+        max_red_s: int = 120,
     ) -> None:
         self.tls_id = tls_id
         self.movement_ids = movement_ids  # canonical M0..M11 order
@@ -90,7 +118,29 @@ class Intersection:
         self._free = free_movements
         self._links = movement_links
         self._in_lanes = movement_in_lanes
-        self._out_lanes = movement_out_lanes
+        self._out_lanes = {m: sorted(set(ls)) for m, ls in movement_out_lanes.items()}
+        # --- shared-lane apportionment (added 2026-08-30, decisions.md) ---------------
+        # pressure(m) = sum(incoming) - sum(outgoing) presupposes that the movements
+        # PARTITION the lanes. The locked MPLight allocation breaks that presupposition:
+        # the rightmost lane of each approach is "through + right", so it is claimed by
+        # BOTH the through movement and the free right (n_t_0 by M1 and M2, and likewise
+        # e_t_0, s_t_0, w_t_0). Summing over 12 movements therefore traversed 16
+        # lane-counts for 12 physical lanes and every vehicle in a shared lane was
+        # weighted 2x in the reward - measured at a median 30.3% and a max 64.0% of
+        # |reward| on SCN-02. The exit side had the SAME defect with the opposite sign
+        # (t_s_0 is claimed by M1 and M11, etc.) and was additionally not deduplicated,
+        # so a movement with two links onto one exit lane counted it twice again.
+        # Weighting each lane by 1/(movements claiming it) restores the partition:
+        # sum_m incoming(m) is once again the vehicle count on the approach.
+        def _weights(lane_map: dict[str, list[str]]) -> dict[str, list[float]]:
+            claims: dict[str, int] = {}
+            for lanes in lane_map.values():
+                for lane in lanes:
+                    claims[lane] = claims.get(lane, 0) + 1
+            return {m: [1.0 / claims[l] for l in lanes] for m, lanes in lane_map.items()}
+
+        self._in_w = _weights(self._in_lanes)
+        self._out_w = _weights(self._out_lanes)
         self._n_links = n_links
         self.yellow_s = yellow_s
         self.all_red_s = all_red_s
@@ -145,9 +195,13 @@ class Intersection:
         all_red_s = int(transitions.get("all_red_s", 2))
         safety = spec.get("safety", {})
         min_green_s = int(safety.get("min_green_s", 10))
-        # max-green == max-red anti-starvation bound (60s, safety-masking.md / decisions.md)
-        max_green_s = int(safety.get("max_green_s", safety.get("max_red_s", 60)))
-        max_red_s = int(safety.get("max_red_s", max_green_s))
+        # max_green_s bounds the CURRENT phase; max_red_s bounds how long any controlled
+        # movement may stay unserved. They are DIFFERENT bounds and 60/60 is infeasible
+        # (see movements.yaml safety: the arithmetic puts worst-case red at 196s).
+        # Amended 2026-08-30 to 60 / 120. These fallbacks are last-resort only - the
+        # vault movements.yaml is the SSOT and is what every real build reads.
+        max_green_s = int(safety.get("max_green_s", 60))
+        max_red_s = int(safety.get("max_red_s", 120))
 
         controlled_links = conn.trafficlight.getControlledLinks(tls_id)
         n_links = len(controlled_links)
@@ -223,13 +277,15 @@ class Intersection:
     def pressures(self, conn: Any) -> np.ndarray:
         """Return the 12 movement pressures (unnormalized), canonical M0..M11 order.
 
-        ``pressure(m) = sum(count incoming lanes) - sum(count outgoing lanes)``.
+        ``pressure(m) = sum(count incoming) - sum(count outgoing)``, with each lane
+        APPORTIONED by ``1 / (movements claiming it)`` so the shared through+right lane
+        is not counted twice (see the apportionment note in ``__init__``).
         """
         count = conn.lane.getLastStepVehicleNumber
         out = np.empty(N_MOVEMENTS, dtype=np.float64)
         for i, mid in enumerate(self.movement_ids):
-            inc = sum(count(l) for l in self._in_lanes[mid])
-            outc = sum(count(l) for l in self._out_lanes[mid])
+            inc = sum(count(l) * w for l, w in zip(self._in_lanes[mid], self._in_w[mid]))
+            outc = sum(count(l) * w for l, w in zip(self._out_lanes[mid], self._out_w[mid]))
             out[i] = inc - outc
         return out
 
@@ -244,7 +300,7 @@ class Intersection:
         halting = conn.lane.getLastStepHaltingNumber
         out = np.empty(N_MOVEMENTS, dtype=np.float64)
         for i, mid in enumerate(self.movement_ids):
-            out[i] = sum(halting(l) for l in self._in_lanes[mid])
+            out[i] = sum(halting(l) * w for l, w in zip(self._in_lanes[mid], self._in_w[mid]))
         return out
 
     def movement_counts(self, conn: Any) -> np.ndarray:
@@ -256,7 +312,7 @@ class Intersection:
         count = conn.lane.getLastStepVehicleNumber
         out = np.empty(N_MOVEMENTS, dtype=np.float64)
         for i, mid in enumerate(self.movement_ids):
-            out[i] = sum(count(l) for l in self._in_lanes[mid])
+            out[i] = sum(count(l) * w for l, w in zip(self._in_lanes[mid], self._in_w[mid]))
         return out
 
     # --- green-state synthesis for an action ---

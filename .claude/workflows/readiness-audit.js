@@ -39,6 +39,29 @@ still fixed and look for anything of the same CLASS:
 The lesson: this project's failures are SPECIFIED-BUT-UNENFORCED invariants, and metrics or
 controls that measure something subtly different from what they claim. Hunt for that shape.
 
+UNCOMMITTED CHANGES IN THE WORKING TREE (made 2026-08-30, NOT yet reviewed - audit these
+hardest, and update this block when they are superseded):
+A. specs/movements.yaml safety.max_red_s: 60 -> 120, with aligned last-resort fallbacks in
+   src/env/intersection.py (max_green_s and max_red_s no longer default to each other).
+   Rationale: 4 phases => worst-case red = 3*max_green + 4*yellow + 2*all_red = 196s, so a
+   60s bound was arithmetically unreachable while max_green_s=60. Measured floor ~95s.
+   CHECK: is 120 provably achievable in the WORST case, or only on average? Does the bound
+   now actually BIND? Does any test still hardcode 60 and pass for the wrong reason - i.e.
+   is a test now passing only because the bound got LOOSER?
+B. src/ml/dqn.py learn(): F.mse_loss -> F.smooth_l1_loss(q, target, beta=HUBER_KAPPA).
+   Rationale: grad clipping reportedly fired on 100% of updates because the reward is the
+   unnormalized -sum|pressure| (~1e4 when jammed), and an always-firing global-norm clip
+   divides each update by its own error magnitude, down-weighting the largest-TD-error
+   transitions - which are the gridlock events.
+   CHECK: verify that 100%/1e4 claim against runs/*/steps.csv (grad_norm is logged pre-clip,
+   grad_clip=10.0) rather than trusting it. Then judge sufficiency: Huber's gradient is
+   bounded at beta, so if TD errors really are 1e3-1e4 the loss degenerates toward
+   sign(error) and can no longer distinguish 'bad' from 'catastrophic' - the exact
+   discrimination the gridlock question needs. Is beta=1.0 right at this reward scale?
+
+THE PIPELINE IS ABOUT TO BE RE-RUN (~4h) AND EVERY PRIOR RESULT IS VOID. Weight your
+severity by: does this change what gets RECORDED, and can it be retrofitted afterwards?
+
 Report CONFIRMED (traced in code, exact failure statable) vs SUSPECTED. Cite file:line.
 No style nits. Severity: critical / high / medium / low.
 `

@@ -64,12 +64,20 @@ def load_forecaster(
 
 
 def random_forecaster(
-    *, seed: int | None = None, stats_from: LSTMForecaster | None = None
+    *, seed: int | None = None, stats_from: LSTMForecaster
 ) -> LSTMForecaster:
     """A frozen, UNTRAINED forecaster for the random-LSTM control ablation (T-03-07/T-04-03).
 
     Same architecture and random initial weights, isolating "does a *real* forecast help?"
     from "does *any* extra input help?".
+
+    ``stats_from`` is MANDATORY as of 2026-08-30. It used to default to ``None`` and
+    silently no-op, and ``scripts/train_dqn.py`` was calling it that way - so a control
+    trained through that path saw RAW-unit inputs while ``eval_runner.py`` rebuilt the
+    same control WITH the deployed forecaster's stats, evaluating a checkpoint on inputs
+    it had never seen. Making it a required keyword is what stops that pairing from being
+    reintroduced; the docstring already claimed it was required, only the signature did
+    not enforce it.
 
     ``stats_from`` is REQUIRED for a valid comparison; it copies the deployed forecaster's
     fitted ``input_mean``/``input_std`` into the control. Without it the control keeps the

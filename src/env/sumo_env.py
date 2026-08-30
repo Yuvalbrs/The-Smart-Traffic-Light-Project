@@ -53,6 +53,7 @@ from src.env.intersection import (
     _VAULT_MOVEMENTS,
     Intersection,
 )
+from src.env.intersection import squash_pressures
 from src.env.masking import barrier_crossing_mask, compute_mask
 from src.trace import JsonlWriter, MovementResolver, build_sim_frame
 
@@ -64,7 +65,25 @@ _ACTUATED_ADD_FILE = _REPO_ROOT / "config" / "network" / "actuated.add.xml"
 _ACTUATED_PROGRAM = "actuated"
 
 _OBS_DIM = 20
-_PRESSURE_CLIP = 10.0  # clip pressures to +/-10 then /10 -> [-1, 1] (state-space.md)
+# Observation squashing. AMENDED 2026-08-30 (decisions.md), superseding the locked
+# "clip to +/-10 then /10". Measured live on SCN-02 under congestion, the hard clip pinned
+# 26.9% of the 12 pressure dims at exactly +/-1.0 overall and 33.3% in the worst-10% reward
+# states, with |pressure| reaching 36. Two states with rewards -120 and -203 were therefore
+# OBSERVATIONALLY IDENTICAL to the agent: the information distinguishing "congested" from
+# "gridlocked" was deleted before it reached the network, and no loss function or reward
+# scale can recover it. tanh is monotone everywhere, so ordering is preserved at every
+# magnitude, and it is strictly inside (-1, 1) so the Box(-1, 1) contract still holds.
+# PRESSURE_SCALE and the transform itself live in src/env/intersection.py - ONE
+# definition, imported by both this env and the max-pressure baseline.
+_PRESSURE_CLIP = 10.0   # retained: the LIVE DASHBOARD's display scaling, not the obs
+
+# Reward scaling. AMENDED 2026-08-30 (decisions.md). The locked reward
+# r = -|P(s')| - 0.1*1[switched] is unnormalized and measured at median -36.2 / min -203.4
+# per step, driving Q to ~-1e4 and making global-norm grad clipping fire on 99.996% of
+# 2.86M updates. A POSITIVE LINEAR rescale of the whole reward provably preserves the
+# argmax policy and every ordering, so the pre-registered objective is unchanged in
+# everything except units; it is applied to BOTH terms so their relative weight is exact.
+_REWARD_SCALE = 0.01
 
 
 def gridlock_penalty(max_queue: float, mu: float, threshold: float) -> float:
@@ -449,6 +468,8 @@ class SUMOEnv(gym.Env):
                     self._gridlock_queue_threshold,
                 )
 
+            reward *= _REWARD_SCALE  # whole reward, after every term: preserves argmax
+
             # Green timer for the NEXT mask: a switch resets it to the green run that
             # actually elapsed this window (window minus this TLS's own transition); a
             # hold accumulates the full window. Independent per TLS.
@@ -547,6 +568,7 @@ class SUMOEnv(gym.Env):
                 self._gridlock_penalty_mu,
                 self._gridlock_queue_threshold,
             )
+        reward *= _REWARD_SCALE  # whole reward, after every term: preserves argmax
         live = traci.trafficlight.getRedYellowGreenState(tls_id)
         action = ix.action_for_state(live)  # None during yellow/all-red -> hold last
         if action is not None:
@@ -596,15 +618,71 @@ class SUMOEnv(gym.Env):
             for mid in ix.movement_ids
             if mid not in free
         }
-        worst_mid, worst_red = max(reds.items(), key=lambda kv: kv[1])
-        if worst_red < ix.max_red_s - self._red_margin_s:
+        # Rank movements worst-first. Ties are broken by movement id ONLY after red time,
+        # and the co-service rule below is what stops that deterministic order from
+        # systematically shorting the higher-indexed member of a tie.
+        ranked = sorted(reds.items(), key=lambda kv: (-kv[1], kv[0]))
+
+        # What one forced service actually costs, derived from the locked timings rather
+        # than assumed to be a single decision window. Three things stand between "this
+        # movement is over the line" and "it has green": the window in which the switch
+        # is chosen, a possible min-green lockout (compute_mask refuses to switch below
+        # min-green and returns BEFORE this narrowing is applied), and the yellow +
+        # all-red clearance. `_red_margin_s` (one window) covered only the first.
+        lockout = -(-ix.min_green_s // self._decision_interval_s) * self._decision_interval_s
+        margin = self._decision_interval_s + lockout + ix.yellow_s + ix.all_red_s
+
+        # Trigger. Two movements that share no phase must be served one AFTER the other,
+        # and each service costs at least one decision window plus its clearance. So the
+        # movement ranked i-th worst waits through i other services before its own, and a
+        # single-window margin only ever covers the rank-0 case. Scaling the margin by
+        # rank is what makes the bound hold when several movements queue up behind it
+        # (measured before this: M9, then M1, then M7 each needed a separate service, and
+        # M7 reached 160 s against a 120 s bound).
+        # How many SERVICES the movements ahead of a given one actually need - not how
+        # many movements there are. A phase serves two controlled movements at once and
+        # {0,1,4,5} is a perfect 4-phase cover of all eight, so counting movements
+        # over-estimates the queue by 2x and made this fire on 100% of decisions, which
+        # left the controller 1.5 legal actions out of 8 and would have reduced every
+        # variant to the same forced round-robin. Greedy set-cover over the 8 phases.
+        def _services(mids: list[str]) -> int:
+            remaining, n = set(mids), 0
+            while remaining:
+                best = max(range(N_PHASES),
+                           key=lambda a: len(remaining.intersection(ix.phase_green(a))))
+                covered = remaining.intersection(ix.phase_green(best))
+                if not covered:  # unreachable for a well-formed phase set; do not spin
+                    break
+                remaining -= covered
+                n += 1
+            return n
+
+        if not any(
+            red >= ix.max_red_s - margin * _services([m for m, _ in ranked[: rank + 1]])
+            for rank, (_mid, red) in enumerate(ranked)
+        ):
             return None
+
+        worst_mid = ranked[0][0]
         # Restrict to phases serving the LONGEST-waiting movement specifically. Allowing
-        # any starved movement to satisfy the rule lets a policy keep picking whichever
+        # ANY starved movement to satisfy the rule lets a policy keep picking whichever
         # starved phase it prefers while the true worst case keeps waiting (measured:
         # 280 s tail under a random policy). Serving the worst first bounds the tail.
+        serving = [a for a in range(N_PHASES) if worst_mid in ix.phase_green(a)]
+
+        # ...but among those phases, prefer the ones that ALSO serve the most OTHER
+        # movements that are already over the line. This is the fix for the tie-break
+        # exploit: with M1 and M7 tied, phase 0 serves both while phase 2 serves only M1.
+        # Permitting both let the policy drain M1 and leave M7 to breach the bound on the
+        # next lap. Narrowing to the maximal co-service set never delays the worst
+        # movement (every phase here serves it) and drains the tie in one green.
+        starved = {mid for mid, red in reds.items()
+                   if red >= ix.max_red_s - margin}
+        starved.add(worst_mid)
+        cover = {a: len(starved.intersection(ix.phase_green(a))) for a in serving}
+        best = max(cover.values())
         return np.array(
-            [worst_mid in ix.phase_green(a) for a in range(N_PHASES)], dtype=bool
+            [cover.get(a, 0) == best for a in range(N_PHASES)], dtype=bool
         )
 
     def _advance_window(
@@ -713,7 +791,7 @@ class SUMOEnv(gym.Env):
         ix = self._intersections[tls_id]
         if pressures is None:
             pressures = ix.pressures(traci)
-        norm = np.clip(pressures, -_PRESSURE_CLIP, _PRESSURE_CLIP) / _PRESSURE_CLIP
+        norm = squash_pressures(pressures)
         one_hot = np.zeros(N_PHASES, dtype=np.float32)
         one_hot[self._last_action[tls_id]] = 1.0
         return np.concatenate([norm.astype(np.float32), one_hot])

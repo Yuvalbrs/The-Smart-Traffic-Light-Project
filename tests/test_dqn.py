@@ -165,7 +165,7 @@ def test_sync_target_copies_weights() -> None:
 # --- DoD trap 2: reward sanity on the live env ---
 
 def test_reward_sanity_switch_penalty_fires_iff_action_changes(tmp_path) -> None:
-    """No traffic at step 0 -> reward is just the switch penalty: 0 on a hold, -0.1 on a switch."""
+    """No traffic at step 0 -> reward is just the switch penalty, scaled by _REWARD_SCALE."""
     from src.env.sumo_env import SUMOEnv
 
     # one vehicle that departs well after the first decision window -> zero pressure in [0,10).
@@ -185,8 +185,11 @@ def test_reward_sanity_switch_penalty_fires_iff_action_changes(tmp_path) -> None
     finally:
         env_switch.close()
 
+    from src.env.sumo_env import _REWARD_SCALE
+
     assert r_hold == pytest.approx(0.0)  # no traffic, no switch -> no penalty
-    assert r_switch == pytest.approx(-0.1)  # penalty fires exactly on the change
+    # penalty fires exactly on the change, carried through the reward rescale
+    assert r_switch == pytest.approx(-0.1 * _REWARD_SCALE)
     assert -70.0 <= r_hold <= 0.0  # step-0 reward sign/bound
 
 
