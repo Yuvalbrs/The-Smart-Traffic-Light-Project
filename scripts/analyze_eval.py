@@ -21,18 +21,23 @@ an ``sd_ts`` column instead of being spent as sample size. Eval seeds are 7000-7
 n=5 the two-sided signed-rank test has minimum attainable p = 2/2^5 = 0.0625 and cannot reject at
 alpha=0.05 for ANY data.
 
-**Amendment A2 (censoring).** Gridlock censoring is informative, not missing. PRIMARY: a censored
-episode-value is replaced by a value strictly worse than every uncensored value in that comparison
-(worst-rank), so no pair is dropped for censoring and a mutual failure scores as the tie it is.
+**Amendment A2 (censoring), as corrected by A4.** Gridlock censoring is informative, not missing.
+PRIMARY: a censored pair's DIFFERENCE is imputed to strictly exceed every fully-observed |d| in
+that comparison, signed by which arm failed - so the pair always takes the top signed rank, no pair
+is dropped for censoring, and a mutual failure scores as the tie it is. (A2.2 originally imputed an
+extreme VALUE; because the signed-rank test ranks DIFFERENCES, that could give a censored pair the
+SMALLEST rank - the opposite of the intent. A4 fixes the scale.)
 SENSITIVITY: the same families complete-case (drop the pair if EITHER arm is censored). Both are
 reported; if they disagree on a hypothesis, **the disagreement is the result**. The superseded rule
 dropped a pair only when BOTH arms were censored, which kept exactly the episodes the treatment won
 by not failing -- outcome-dependent selection. A variant's aggregate is censored if ANY of its
 training-seed runs is censored (A2.4).
 
-**Amendment A3 (minimum reportable n).** A test whose n cannot attain its family's Holm threshold
-under any data is reported ``UNDECIDABLE`` and leaves the family, with m reduced and the reduction
-stated -- it is never reported as a non-rejection.
+**Amendment A3 (minimum reportable n), as corrected by A4.** A test whose n cannot attain its
+family's Holm threshold under any data is reported ``UNDECIDABLE`` and is never reported as a
+non-rejection. A3 originally also REDUCED m by the undecidable count; A4 retires that, because n
+depends on the data and a data-dependent m weakens the correction exactly when the evidence is
+already degraded. m stays pinned at the pre-registered family size.
 
 The 7 KPIs + better-direction are the locked set (preregistration s3). SCN-01..04 are reported as
 SUPPORTING/exploratory (raw p, no family correction) - this is where the regime-dependence shows.
@@ -156,16 +161,23 @@ def _arm_value(dqn, base, name, is_dqn, scenario, es, kpi):
     return value, censored, sd, True
 
 
-def _sentinel(recs: list[dict], direction: str) -> float:
-    """A2.4: the worst-rank stand-in, just beyond the worst uncensored value across BOTH arms."""
-    obs = [r["va"] for r in recs if not r["ca"] and not np.isnan(r["va"])]
-    obs += [r["vb"] for r in recs if not r["cb"] and not np.isnan(r["vb"])]
-    if not obs:
-        return float("nan")
-    lo, hi = min(obs), max(obs)
-    rng = hi - lo
-    margin = _SENTINEL_FRAC * rng if rng > 0 else _SENTINEL_FALLBACK
-    return hi + margin if direction == "lower" else lo - margin
+def _worst_rank_delta(recs: list[dict]) -> float:
+    """A2.2 as CORRECTED by amendment A4: the imputed magnitude, on the DIFFERENCE scale.
+
+    The Wilcoxon signed-rank statistic ranks ``|d_i|``, not the outcome values. The original A2.2
+    imputed an extreme VALUE and asserted the resulting pair would take the largest rank - which is
+    false whenever the surviving arm happens to sit near the imputed extreme. Measured on a worked
+    example the imputed pair ranked 1 of 5, the SMALLEST, so an episode where the comparator
+    gridlocked contributed the LEAST evidence. That inverts the intent.
+
+    Imputing on the difference scale makes the guarantee hold by construction: the returned
+    magnitude strictly exceeds every fully-observed ``|d|``, so a censored pair always takes the
+    top rank, and its SIGN is set by which arm failed (``_series``).
+    """
+    obs = [abs(r["va"] - r["vb"]) for r in recs
+           if not r["ca"] and not r["cb"] and not np.isnan(r["va"]) and not np.isnan(r["vb"])]
+    biggest = max(obs, default=0.0)
+    return biggest * (1.0 + _SENTINEL_FRAC) if biggest > 0 else _SENTINEL_FALLBACK
 
 
 def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, b_is_dqn, mode):
@@ -197,7 +209,7 @@ def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, 
     sds: list[float] = []
     dropped_cens = 0
     imputed = 0
-    sent = _sentinel(recs, direction) if mode == "primary" else float("nan")
+    delta = _worst_rank_delta(recs) if mode == "primary" else float("nan")
 
     for r in recs:
         if mode == "complete":
@@ -206,13 +218,28 @@ def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, 
                 continue
             a_vals.append(r["va"])
             b_vals.append(r["vb"])
+        elif r["ca"] and r["cb"]:
+            # Mutual failure is a tie: difference exactly 0, Pratt handles the zero (A2.2).
+            a_vals.append(0.0)
+            b_vals.append(0.0)
+            imputed += 2
+        elif r["ca"] or r["cb"]:
+            # One arm failed. Build the pair so its DIFFERENCE is the extreme one, signed by
+            # WHICH arm failed. `_wilcoxon` takes d = a - b; for a lower-is-better KPI a failed
+            # A means a > b (d > 0), and the reverse for higher-is-better.
+            worse_is_a = bool(r["ca"])
+            positive = worse_is_a if direction == "lower" else not worse_is_a
+            signed = delta if positive else -delta
+            if worse_is_a:
+                b_vals.append(r["vb"])
+                a_vals.append(r["vb"] + signed)
+            else:
+                a_vals.append(r["va"])
+                b_vals.append(r["va"] - signed)
+            imputed += 1
         else:
-            if (r["ca"] or r["cb"]) and np.isnan(sent):
-                dropped_cens += 1  # nothing uncensored anywhere to rank against
-                continue
-            a_vals.append(sent if r["ca"] else r["va"])
-            b_vals.append(sent if r["cb"] else r["vb"])
-            imputed += int(r["ca"]) + int(r["cb"])
+            a_vals.append(r["va"])
+            b_vals.append(r["vb"])
         if not np.isnan(r["sda"]):
             sds.append(r["sda"])
 
@@ -307,7 +334,12 @@ def _family(dqn, base, eval_seeds, scenario, a_variant, comparisons, title, line
             })
 
     n_und = sum(r["undecidable"] for r in rows)
-    m_used = max(1, prereg_m - n_und)
+    # A4 SUPERSEDES A3's m-reduction. A3 shrank m by the undecidable count - but n is a function
+    # of the DATA (censoring, missingness), so that is exactly the data-dependent m the _holm
+    # docstring warns against, weakening the correction precisely when the evidence is already
+    # degraded. Reporting UNDECIDABLE is kept; reducing m is not. Leaving m pinned is the
+    # CONSERVATIVE error, which is the acceptable direction.
+    m_used = prereg_m
     adj = _holm([float("nan") if r["undecidable"] else r["p"] for r in rows], family_size=m_used)
     adj_c = _holm([float("nan") if r["n_c"] < floor_n else r["p_c"] for r in rows], family_size=m_used)
     for r, a, ac in zip(rows, adj, adj_c):
@@ -316,8 +348,8 @@ def _family(dqn, base, eval_seeds, scenario, a_variant, comparisons, title, line
         r["sig_c"] = (not np.isnan(ac)) and ac < ALPHA
         r["agree"] = (r["sig"] == r["sig_c"]) and not r["undecidable"] and r["n_c"] >= floor_n
 
-    m_note = (f"; **m reduced {prereg_m} -> {m_used}** ({n_und} UNDECIDABLE per A3)" if n_und
-              else f"; m = {prereg_m} as pre-registered")
+    m_note = (f"; m = {prereg_m}, PINNED ({n_und} UNDECIDABLE per A3 are reported but do NOT "
+              f"shrink m - see A4)" if n_und else f"; m = {prereg_m} as pre-registered")
     lines.append(f"\n### {title}")
     lines.append(f"_n = one value per eval seed (A1.2). Holm family {prereg_m} tests{m_note}. "
                  f"A test needs n >= {floor_n} to be capable of rejection in this family (A1.3)._")

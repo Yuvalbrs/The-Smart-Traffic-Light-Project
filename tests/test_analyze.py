@@ -171,8 +171,10 @@ def test_pair_where_only_the_comparator_gridlocked_is_no_longer_a_free_win():
                             "hybrid", "webster", False, "primary")
     assert len(a_p) == 5, "primary drops no pair for censoring"
     assert m_p["imputed"] == 1 and m_p["cens_b"] == 1
-    # the censored baseline is ranked worse than every observed value, not left at face value
-    assert b_p.max() > max(v for v in b_p if v != b_p.max()) and b_p[2] == b_p.max()
+    # A4: the guarantee is on the DIFFERENCE, because that is what the signed-rank test ranks.
+    d = a_p - b_p
+    assert abs(d[2]) > max(abs(x) for i, x in enumerate(d) if i != 2), "imputed pair must rank top"
+    assert d[2] < 0, "the baseline failed, so the difference must favour hybrid"
 
     a_c, b_c, m_c = _series(dqn, base, _seeds(5), "SCN-05", "avg_waiting_time", "lower",
                             "hybrid", "webster", False, "complete")
@@ -197,9 +199,11 @@ def test_worst_rank_respects_the_better_direction():
     for r in rows:
         r["throughput"] = str(2000.0 + float(r["avg_waiting_time"]))
     dqn, base = _index(rows)
-    _a, b, _m = _series(dqn, base, _seeds(5), "SCN-05", "throughput", "higher",
-                        "hybrid", "webster", False, "primary")
-    assert b[1] == b.min() and b[1] < min(v for v in b if v != b.min())
+    a, b, _m = _series(dqn, base, _seeds(5), "SCN-05", "throughput", "higher",
+                       "hybrid", "webster", False, "primary")
+    d = a - b
+    assert abs(d[1]) > max(abs(x) for i, x in enumerate(d) if i != 1), "imputed pair must rank top"
+    assert d[1] > 0, "higher-is-better: a failed baseline must make hybrid-minus-baseline POSITIVE"
 
 
 def test_a_variant_censored_on_one_train_seed_is_censored_for_that_episode():
@@ -219,3 +223,66 @@ def test_missing_row_is_a_drop_not_a_censoring():
                           "hybrid", "webster", False, "primary")
     assert len(a) == 4
     assert meta["missing"] == 1 and meta["dropped_cens"] == 0
+
+
+# --- A4 (2026-09-01): the correction to A2.2's imputation scale --------------
+
+
+@pytest.mark.parametrize("direction,fail_arm,expect_positive", [
+    ("lower", "b", False),   # lower-is-better, comparator failed -> hybrid-minus-other negative
+    ("lower", "a", True),    # lower-is-better, treatment failed  -> positive
+    ("higher", "b", True),   # higher-is-better, comparator failed -> positive
+    ("higher", "a", False),  # higher-is-better, treatment failed  -> negative
+])
+def test_a4_imputed_pair_always_takes_the_top_signed_rank(direction, fail_arm, expect_positive):
+    """A2.2 promised the imputed pair would take the largest rank; A4 makes that TRUE.
+
+    The original rule imputed an extreme VALUE. The Wilcoxon signed-rank test ranks |d_i|, not
+    values, so when the surviving arm sat near the imputed extreme the pair could rank LAST-but-one
+    or even first - measured at rank 1 of 5 on a worked example, meaning an episode where the
+    comparator gridlocked contributed the LEAST evidence. Imputing on the difference scale makes
+    the guarantee structural instead of hoped-for.
+    """
+    rows = []
+    pairs = [(10.0, 20.0), (19.0, 19.5), (11.0, 20.0), (12.0, 20.0), (13.0, 20.0)]
+    if direction == "higher":
+        pairs = [(b, a) for a, b in pairs]
+    hit = 1  # the near-tie pair: the case the value-scale imputation got wrong
+    for i, (av, bv) in enumerate(pairs):
+        es = str(7000 + i)
+        for ts in _TRAIN_SEEDS:
+            rows.append(_dqn_row("hybrid", ts, es, av, 1 if (i == hit and fail_arm == "a") else 0))
+        rows.append(_base_row("webster", es, bv, 1 if (i == hit and fail_arm == "b") else 0))
+    dqn, base = _index(rows)
+    a, b, meta = _series(dqn, base, _seeds(5), "SCN-05", "avg_waiting_time", direction,
+                         "hybrid", "webster", False, "primary")
+    d = a - b
+    assert meta["imputed"] == 1 and len(d) == 5
+    assert abs(d[hit]) > max(abs(x) for i, x in enumerate(d) if i != hit), (
+        "the censored pair must carry the LARGEST |difference|, i.e. the top signed rank")
+    assert bool(d[hit] > 0) is expect_positive, "the imputed sign must point away from the arm that failed"
+
+
+def test_a4_mutual_failure_is_still_an_exact_tie():
+    rows = _fixture(n_eval_seeds=5, base_censor={"7003"},
+                    dqn_censor={("7003", ts) for ts in _TRAIN_SEEDS})
+    dqn, base = _index(rows)
+    a, b, meta = _series(dqn, base, _seeds(5), "SCN-05", "avg_waiting_time", "lower",
+                         "hybrid", "webster", False, "primary")
+    assert (a - b)[3] == 0.0 and meta["imputed"] == 2
+
+
+def test_a4_holm_family_size_is_not_shrunk_by_undecidable_tests():
+    """A3 reduced m by the undecidable count; A4 retires that.
+
+    n depends on the data (censoring, missingness), so an m that follows it is the data-dependent
+    m that ``_holm``'s own docstring warns against - it weakens the correction exactly when the
+    evidence is already degraded. Pinning m is the conservative error, which is the safe one.
+    """
+    import inspect
+
+    from scripts.analyze_eval import _family
+
+    src = inspect.getsource(_family)
+    assert "m_used = prereg_m" in src, "m must stay pinned at the pre-registered family size"
+    assert "max(1, prereg_m - n_und)" not in src, "the A3 m-reduction must be gone"

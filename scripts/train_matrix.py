@@ -33,7 +33,11 @@ from scripts.build_network import build_net
 from scripts.env_factory import build_env
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
-from src.provenance.official import OFFICIAL_LSTM, official_lstm_version
+from src.provenance.official import (
+    OFFICIAL_LSTM,
+    assert_official_matches_corpus,
+    official_lstm_version,
+)
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +57,7 @@ def _forecaster_for(variant: str, seed: int):
             "(regenerate via scripts/train_lstm.py - it is gitignored)."
         )
     if variant == "hybrid":
+        assert_official_matches_corpus()  # stale pin -> stop, do not record a false data_version
         return load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
     if variant == "random-lstm":
         # scale-matched to the deployed forecaster: without its input stats the control

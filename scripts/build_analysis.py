@@ -190,8 +190,10 @@ def build_confirmatory_family(
     # survived censoring - a data-dependent m weakens the correction exactly when the
     # evidence is already degraded (prereg s6). Amendment A3 is the one sanctioned reduction:
     # a test that cannot reject under ANY data leaves the family instead of taxing its siblings.
+    # A4 supersedes A3's m-reduction: n is data-dependent, so shrinking m by the undecidable
+    # count is the data-dependent m the _holm docstring warns against. m stays pinned.
     n_und = int(df["undecidable"].sum())
-    m_used = max(1, prereg_m - n_und)
+    m_used = prereg_m
     df["p_holm"] = _holm(df["p_raw"].where(~df["undecidable"], np.nan).tolist(), family_size=m_used)
     df["p_holm_cc"] = _holm(df["p_raw_cc"].where(df["n_cc"] >= floor_n, np.nan).tolist(),
                             family_size=m_used)

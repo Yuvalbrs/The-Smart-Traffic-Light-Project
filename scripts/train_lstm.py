@@ -125,10 +125,21 @@ def run_freeze_gate(model: nn.Module, val_loader: DataLoader, device: str) -> tu
 
 
 def _dataset_data_version(data_dir: Path) -> str:
-    """Aggregate the 50 per-file data_versions (manifest) into one dataset version."""
+    """Aggregate the per-file manifest entries into one dataset version.
+
+    Prefers the per-file **content** digests. The previous version aggregated only the per-file
+    ``data_version`` ids, which were derived from configuration and carried no scenario input -
+    so a corpus of 10x SCN-01 produced the same dataset id as the real 10-scenario corpus, and
+    no change in the CSV bytes could ever move the id. A checkpoint name that cannot distinguish
+    two different corpora is not provenance.
+    """
     manifest_path = data_dir / "manifest.json"
     if manifest_path.exists():
-        dvs = sorted(e["data_version"] for e in json.loads(manifest_path.read_text()))
+        entries = json.loads(manifest_path.read_text())
+        shas = sorted(e["file_sha256"] for e in entries if e.get("file_sha256"))
+        if shas:
+            return f"data-{config_hash({'file_sha256s': shas})}"
+        dvs = sorted(e["data_version"] for e in entries)  # pre-2026-09-01 manifests
         return f"data-{config_hash({'file_data_versions': dvs})}"
     return f"data-{config_hash({'data_dir': str(data_dir)})}"  # fallback, no manifest
 

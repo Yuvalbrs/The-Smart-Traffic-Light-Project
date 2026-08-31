@@ -157,3 +157,96 @@ def test_identical_inputs_get_different_run_ids(tmp_path) -> None:
         s.commit()
         assert r1.data_version == r2.data_version  # same provenance
         assert r1.run_id != r2.run_id  # but distinct run identity
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-01: the LSTM-corpus provenance chain. Three linked defects, found when
+# a regenerated manifest showed 100 files carrying only 10 data_versions.
+# ---------------------------------------------------------------------------
+
+
+def test_data_version_distinguishes_datasets_sharing_every_other_input():
+    """The corpus defect: ten scenarios at one seed shared all four original inputs.
+
+    scenario_configs_hash is a hash of ALL scenario YAMLs, so it is constant across scenarios;
+    git sha, SUMO version and seed are too. Ten genuinely different CSVs were therefore minted
+    with ONE data_version, and an id that cannot tell SCN-01 from SCN-10 cannot carry the
+    provenance chain preregistration s9 requires.
+    """
+    a = data_version(**_DV_INPUTS, dataset_key="SCN-01")
+    b = data_version(**_DV_INPUTS, dataset_key="SCN-10")
+    assert a != b
+    assert a.startswith("data-") and b.startswith("data-")
+
+
+def test_data_version_without_a_dataset_key_is_unchanged():
+    """Backward compatibility: ids minted before the parameter existed must not move."""
+    assert data_version(**_DV_INPUTS, dataset_key="") == data_version(**_DV_INPUTS)
+
+
+def test_data_version_dataset_key_is_deterministic():
+    assert (data_version(**_DV_INPUTS, dataset_key="SCN-04")
+            == data_version(**_DV_INPUTS, dataset_key="SCN-04"))
+
+
+def test_dataset_version_follows_the_bytes_not_just_the_config(tmp_path):
+    """The checkpoint-level defect.
+
+    _dataset_data_version aggregated per-file data_versions only. Those are derived from
+    configuration, so no change in the CSV bytes could ever move the dataset id - and a corpus
+    of 10x SCN-01 produced the same id as the real 10-scenario corpus. It now aggregates the
+    per-file content digests, so the id names the data it was actually trained on.
+    """
+    import json as _json
+
+    from scripts.train_lstm import _dataset_data_version
+
+    def _write(shas):
+        (tmp_path / "manifest.json").write_text(
+            _json.dumps([{"file": f"f{i}.csv", "data_version": "data-same", "file_sha256": s}
+                         for i, s in enumerate(shas)]), encoding="utf-8")
+
+    _write(["aa" * 32, "bb" * 32])
+    v1 = _dataset_data_version(tmp_path)
+    _write(["aa" * 32, "cc" * 32])          # same config, one file's CONTENT changed
+    v2 = _dataset_data_version(tmp_path)
+    assert v1 != v2, "a changed corpus must change the dataset version"
+    _write(["bb" * 32, "aa" * 32])          # order must not matter
+    assert _dataset_data_version(tmp_path) == v1
+
+
+def test_dataset_version_falls_back_for_pre_amendment_manifests(tmp_path):
+    """Manifests written before file_sha256 existed still resolve, via the old aggregation."""
+    import json as _json
+
+    from scripts.train_lstm import _dataset_data_version
+
+    (tmp_path / "manifest.json").write_text(
+        _json.dumps([{"file": "a.csv", "data_version": "data-1"},
+                     {"file": "b.csv", "data_version": "data-2"}]), encoding="utf-8")
+    assert _dataset_data_version(tmp_path).startswith("data-")
+
+
+def test_official_pin_staleness_guard_fires_on_a_regenerated_corpus(tmp_path):
+    """The single-pin design fixed forecaster drift; it never caught CORPUS drift.
+
+    The pin can stay valid-looking while `data/lstm/` is regenerated underneath it, so every run
+    keeps loading a real checkpoint that no longer matches its own data_version. That is silent,
+    and it poisons the provenance chain preregistration s9 promises. The guard makes it loud.
+    """
+    import json
+
+    import pytest as _pytest
+
+    from src.provenance.official import assert_official_matches_corpus, official_data_version
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps([{"file": "a.csv", "data_version": "data-x", "file_sha256": "ab" * 32}]),
+        encoding="utf-8")
+    with _pytest.raises(RuntimeError, match="stale"):
+        assert_official_matches_corpus(tmp_path)
+    # and it names both sides so the fix is obvious from the message alone
+    try:
+        assert_official_matches_corpus(tmp_path)
+    except RuntimeError as exc:
+        assert official_data_version() in str(exc)
