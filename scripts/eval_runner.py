@@ -64,7 +64,9 @@ _OFFICIAL_LSTM = OFFICIAL_LSTM  # single source of truth: src/provenance/officia
 CONFIRMATORY_SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")
 TRAIN_SEEDS = (42, 123, 2024)
 DQN_VARIANTS = ("plain", "hybrid", "random-lstm")
-DEFAULT_EVAL_SEEDS = (7000, 7001, 7002, 7003, 7004)  # held-out; disjoint from train/val seeds
+DEFAULT_EVAL_SEEDS = tuple(range(7000, 7015))  # prereg A1.3 (2026-09-01): 15 held-out seeds.
+# n=5 (the pre-amendment block 7000-7004) cannot reject at alpha=0.05 under ANY data once train
+# seeds stop being counted as replication: min attainable two-sided signed-rank p = 2/2**5 = 0.0625.
 
 # (EpisodeKPIs attribute, episode_kpi column) - scalar KPIs only; the [12] lists are stored too.
 _SCALAR_KPIS = (

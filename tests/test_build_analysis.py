@@ -108,32 +108,76 @@ def test_algo_key_uses_variant_for_dqn_rows_and_algo_for_baselines():
 
 
 # --------------------------------------------------------------------------------------------
-# Confirmatory families - reuses the locked _pairs/_wilcoxon/_holm; check family bookkeeping
+# Confirmatory families - reuses the locked _series/_wilcoxon/_holm; check family bookkeeping.
+# Amended 2026-09-01 (prereg A1/A2/A3): n is the EVAL-SEED count, and censoring no longer drops
+# pairs in the primary analysis.
 # --------------------------------------------------------------------------------------------
 
 
 def test_confirmatory_family_c2_detects_clear_shift_and_reports_family_size_7():
+    """Amendment A1.2: n is the number of EVAL SEEDS, not train_seed x eval_seed.
+
+    The fixture has 3 train seeds x 5 eval seeds. The superseded pairing reported n=15 from 5
+    independent traffic realizations; the three train seeds are now averaged into each eval
+    seed's value and their spread is reported as ``sd_train_seed`` instead of being counted.
+    """
     rows = _make_fixture_rows()
     df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
     assert len(df) == 7  # 7 KPIs
     assert (df["family_size"] == 7).all()
     avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
-    assert avg_wait_row["n"] == 15
+    assert avg_wait_row["n"] == 5, "n counts eval seeds (A1.2), not train x eval pairs"
     assert avg_wait_row["dropped"] == 0
     assert avg_wait_row["median_diff"] == pytest.approx(-1.0)  # hybrid(8) - plain(9)
+    assert avg_wait_row["effect_source"] == "primary"  # nothing censored -> nothing imputed
+    # A3: with m=7 a test needs n>=9 to be capable of rejecting, so this 5-seed fixture is
+    # correctly flagged undecidable rather than being reported as a non-rejection.
+    assert avg_wait_row["min_testable_n"] == 9
+    assert bool(avg_wait_row["undecidable"]) is True
 
 
-def test_confirmatory_family_drops_pairs_both_censored():
+def test_confirmatory_family_scores_a_mutual_gridlock_as_a_tie_not_a_drop():
+    """Amendment A2.2, replacing the superseded both-censored DROP.
+
+    Both arms failing on the same traffic is a tie, and the primary analysis keeps it as one:
+    both take the worst rank, the paired difference is exactly 0, and Pratt handles the zero.
+    The complete-case sensitivity analysis still drops it, and both numbers are carried in the
+    same frame so neither can be picked after the fact.
+    """
     rows = _make_fixture_rows()
-    # censor the SAME eval seed for both hybrid and plain across all 3 train seeds -> 3 pairs dropped
     for r in rows:
         if r["eval_seed"] == "7000" and r["variant"] in ("hybrid", "plain"):
             r["gridlock_censored"] = "1"
             r["avg_waiting_time"] = ""
     df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
     avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
-    assert avg_wait_row["n"] == 12
-    assert avg_wait_row["dropped"] == 3
+    assert avg_wait_row["n"] == 5, "primary drops NO pair for censoring"
+    assert avg_wait_row["censored_a"] == 1 and avg_wait_row["censored_b"] == 1
+    assert avg_wait_row["imputed"] == 2, "both arms take the worst rank"
+    assert avg_wait_row["n_cc"] == 4 and avg_wait_row["dropped_cc"] == 1, "complete-case drops it"
+    # A2.4: once anything is imputed the effect size comes from the measured episodes only.
+    assert avg_wait_row["effect_source"] == "complete-case"
+
+
+def test_a_lone_censored_comparator_no_longer_hands_the_treatment_a_free_win():
+    """Amendment A2.1 - the selection bias, pinned.
+
+    The superseded rule dropped a pair only when BOTH arms were censored, so a pair in which
+    only the COMPARATOR gridlocked survived at face value: a win earned by not failing, counted
+    as a wait-time win. Now the failed arm is ranked worst (primary) and the pair is dropped
+    outright by the sensitivity analysis.
+    """
+    rows = _make_fixture_rows()
+    for r in rows:
+        if r["eval_seed"] == "7000" and r["variant"] == "plain":
+            r["gridlock_censored"] = "1"
+            r["avg_waiting_time"] = ""
+    df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
+    avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
+    assert avg_wait_row["censored_a"] == 0 and avg_wait_row["censored_b"] == 1
+    assert avg_wait_row["n"] == 5 and avg_wait_row["imputed"] == 1
+    assert avg_wait_row["n_cc"] == 4 and avg_wait_row["dropped_cc"] == 1
+    assert avg_wait_row["dropped"] == 0, "the primary analysis drops nothing for censoring"
 
 
 def test_holm_family_c1_c2_c3_shapes_on_real_csv():

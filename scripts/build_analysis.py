@@ -3,7 +3,7 @@
 Separable, importable analysis+plotting module. T-04-02's DoD requires that the
 plotting/table-generation code live outside the notebook, so a plotting break at write-up time has
 a recovery path instead of a buried blob. Every number in this module is produced by the LOCKED
-statistical core in ``scripts.analyze_eval`` (imported, never reimplemented): ``_pairs``,
+statistical core in ``scripts.analyze_eval`` (imported, never reimplemented): ``_series``,
 ``_wilcoxon``, ``_holm``, ``_index``, ``_eval_seeds``, ``_num``, ``_load``, plus the module
 constants ``TRAIN_SEEDS``, ``KPIS``, ``HEADLINE``, ``ALPHA``.
 
@@ -44,9 +44,10 @@ from scripts.analyze_eval import (
     _index,
     _load,
     _num,
-    _pairs,
+    _series,
     _stars,
     _wilcoxon,
+    min_testable_n,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -120,9 +121,14 @@ def _fmt_cell(stats: dict) -> str:
 
 
 # --------------------------------------------------------------------------------------------
-# Confirmatory Holm-Bonferroni families (C1/C2/C3, SCN-05 only) - reuses _pairs/_wilcoxon/_holm
+# Confirmatory Holm-Bonferroni families (C1/C2/C3, SCN-05 only) - reuses _series/_wilcoxon/_holm
 # unmodified. This is the single source of truth for every "significant yes/no" claim in the
 # report; T1/T2 annotate their SCN-05 columns from these DataFrames rather than recomputing.
+#
+# Amended 2026-09-01 (prereg A1/A2/A3): n is the EVAL-SEED count (train seeds are averaged into
+# the value, not counted as replication); censoring is handled by worst-rank imputation with a
+# complete-case sensitivity analysis carried alongside in the same frame; a test that cannot
+# reject under any data is flagged UNDECIDABLE and leaves the family.
 # --------------------------------------------------------------------------------------------
 
 
@@ -134,16 +140,27 @@ def build_confirmatory_family(
 ) -> pd.DataFrame:
     """One Holm family: ``a_variant`` vs each of ``comparisons`` on the 7 KPIs.
 
-    ``comparisons`` is a list of ``(b_name, b_is_dqn, label)``, matching ``scripts.analyze_eval._pairs``.
-    Returns one row per (KPI, comparison) with the raw p, Holm-adjusted p, and the effect size.
+    ``comparisons`` is a list of ``(b_name, b_is_dqn, label)``, matching ``scripts.analyze_eval._series``.
+    Returns one row per (KPI, comparison) carrying BOTH pre-registered analyses: the primary
+    (worst-rank imputation, A2.2) and the complete-case sensitivity analysis, plus an ``agrees``
+    column. Where they disagree, the disagreement is the reported result - never a choice.
     """
     dqn, base = _index(rows)
     es = _eval_seeds(rows, scenario)
+    prereg_m = len(KPIS) * len(comparisons)
+    floor_n = min_testable_n(prereg_m)  # A1.3/A3: below this, no data can reject
     records = []
     for kpi_col, kpi_label, direction in KPIS:
         for b_name, b_is_dqn, blabel in comparisons:
-            a, b, dropped = _pairs(dqn, base, es, scenario, kpi_col, a_variant, b_name, b_is_dqn)
+            a, b, meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                                 a_variant, b_name, b_is_dqn, "primary")
             p, med, lo, hi, n = _wilcoxon(a, b)
+            ac, bc, meta_c = _series(dqn, base, es, scenario, kpi_col, direction,
+                                     a_variant, b_name, b_is_dqn, "complete")
+            p_c, med_c, lo_c, hi_c, n_c = _wilcoxon(ac, bc)
+            # A2.4: an imputed magnitude is a modelling choice, so it may not stand as the
+            # reported effect size - that falls back to the measured (complete-case) episodes.
+            eff = (med_c, lo_c, hi_c, "complete-case") if meta["imputed"] else (med, lo, hi, "primary")
             records.append(
                 {
                     "kpi": kpi_label,
@@ -152,21 +169,39 @@ def build_confirmatory_family(
                     "headline": kpi_col in HEADLINE,
                     "comparison": blabel,
                     "n": n,
-                    "dropped": dropped,
-                    "median_diff": med,
-                    "ci_lo": lo,
-                    "ci_hi": hi,
+                    "dropped": meta["dropped"],
+                    "sd_train_seed": meta["sd_ts"],
+                    "censored_a": meta["cens_a"],
+                    "censored_b": meta["cens_b"],
+                    "imputed": meta["imputed"],
+                    "median_diff": eff[0],
+                    "ci_lo": eff[1],
+                    "ci_hi": eff[2],
+                    "effect_source": eff[3],
                     "p_raw": p,
+                    "undecidable": bool(n < floor_n),
+                    "n_cc": n_c,
+                    "dropped_cc": meta_c["dropped_cens"],
+                    "p_raw_cc": p_c,
                 }
             )
     df = pd.DataFrame.from_records(records)
     # Holm divides by the PRE-REGISTERED family size (21/7/7), not by however many tests
     # survived censoring - a data-dependent m weakens the correction exactly when the
-    # evidence is already degraded (prereg s6).
-    df["p_holm"] = _holm(df["p_raw"].tolist(), family_size=len(df))
+    # evidence is already degraded (prereg s6). Amendment A3 is the one sanctioned reduction:
+    # a test that cannot reject under ANY data leaves the family instead of taxing its siblings.
+    n_und = int(df["undecidable"].sum())
+    m_used = max(1, prereg_m - n_und)
+    df["p_holm"] = _holm(df["p_raw"].where(~df["undecidable"], np.nan).tolist(), family_size=m_used)
+    df["p_holm_cc"] = _holm(df["p_raw_cc"].where(df["n_cc"] >= floor_n, np.nan).tolist(),
+                            family_size=m_used)
     df["stars"] = df["p_holm"].apply(_stars)
     df["significant"] = df["p_holm"].apply(lambda p: bool(p < ALPHA) if not np.isnan(p) else False)
-    df["family_size"] = int(len(df))  # pre-registered size
+    df["significant_cc"] = df["p_holm_cc"].apply(lambda p: bool(p < ALPHA) if not np.isnan(p) else False)
+    df["agrees"] = (df["significant"] == df["significant_cc"]) & ~df["undecidable"] & (df["n_cc"] >= floor_n)
+    df["family_size"] = int(prereg_m)          # pre-registered size
+    df["family_size_used"] = int(m_used)        # after A3 exclusions, stated in the caption
+    df["min_testable_n"] = int(floor_n)
     df["family_testable"] = int(df["p_raw"].notna().sum())  # how many were computable
     return df
 
@@ -204,9 +239,13 @@ def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
             for kpi_col, kpi_label, direction in KPIS:
                 if kpi_col not in HEADLINE:
                     continue
-                a, b, dropped = _pairs(dqn, base, es, scenario, kpi_col, "hybrid", b_name, True)
+                a, b, meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                                     "hybrid", b_name, True, "primary")
+                dropped = meta["dropped"]
                 p, med, lo, hi, n = _wilcoxon(a, b)
-                verdict = "no effect detected at n=15" if (np.isnan(p) or p >= ALPHA) else (
+                # prereg s7: an exploratory non-rejection is "not detected at this power",
+                # never "no effect" - and the n quoted must be the ACTUAL n (A1.2), not 15.
+                verdict = f"no effect detected at n={n}" if (np.isnan(p) or p >= ALPHA) else (
                     "hybrid better" if (med < 0) == (direction == "lower") else "hybrid worse"
                 )
                 records.append(
@@ -286,7 +325,9 @@ def _sig_marker(rows: list[dict], scenario: str, baseline_or_variant: str, kpi_c
     dqn, base = _index(rows)
     es = _eval_seeds(rows, scenario)
     is_dqn = baseline_or_variant in HEADLINE_VARIANTS and baseline_or_variant != "hybrid"
-    a, b, _dropped = _pairs(dqn, base, es, scenario, kpi_col, "hybrid", baseline_or_variant, is_dqn)
+    direction = next(d for c, _l, d in KPIS if c == kpi_col)
+    a, b, _meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                          "hybrid", baseline_or_variant, is_dqn, "primary")
     p, _med, _lo, _hi, _n = _wilcoxon(a, b)
     if np.isnan(p) or p >= ALPHA:
         return ""
