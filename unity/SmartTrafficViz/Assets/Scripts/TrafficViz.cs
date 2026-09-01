@@ -170,8 +170,56 @@ namespace SmartTraffic
             {
                 foreach (var kv in colors)
                 {
-                    if (_heads.TryGetValue(kv.Key, out var head)) head.Set(kv.Value);
+                    if (!_heads.TryGetValue(kv.Key, out var head)) continue;
+                    head.Set(AspectFor(kv.Key, kv.Value, colors));
                 }
+            }
+        }
+
+
+        /// <summary>The rightmost lane of every approach is SHARED, and its head must say so.
+        ///
+        /// `config/network/intersection.con.xml` gives lane 0 TWO connections - a through and a
+        /// right - and `link_index_binding.yaml` binds the through half to the THROUGH movement,
+        /// not the right one. The right half is permissive: link 0 is lowercase 'g' in all eight
+        /// phases, i.e. green-but-give-way, always.
+        ///
+        /// So a head driven by the right movement alone is green 100% of the time, including
+        /// through the six phases of eight where that lane's through traffic is held at red. On
+        /// screen that is a green light above a stationary queue - which is what it looked like,
+        /// and it was reported as a simulation bug. The simulation was right: the car under the
+        /// lamp was through-bound and correctly stopped.
+        ///
+        /// One lamp cannot honestly show two independently controlled movements, so it shows the
+        /// one that decides whether the lane can discharge at all: the more restrictive of the
+        /// pair. Fixed here rather than in the network on purpose - splitting lane 0 into a
+        /// right-turn-only lane would change capacity and invalidate the evaluation campaign.</summary>
+        private static readonly Dictionary<string, string> SharedLaneThrough =
+            new Dictionary<string, string>
+            {
+                { "M2", "M1" },    // N right shares lane 0 with N through
+                { "M5", "M4" },    // E
+                { "M8", "M7" },    // S
+                { "M11", "M10" },  // W
+            };
+
+        private static string AspectFor(
+            string movement, string own, Dictionary<string, string> all)
+        {
+            if (!SharedLaneThrough.TryGetValue(movement, out var partner)) return own;
+            return all.TryGetValue(partner, out var other) ? MoreRestrictive(own, other) : own;
+        }
+
+        private static string MoreRestrictive(string a, string b) => Severity(a) >= Severity(b) ? a : b;
+
+        /// <summary>red beats yellow beats green - anything unrecognised is treated as stop.</summary>
+        private static int Severity(string aspect)
+        {
+            switch (aspect)
+            {
+                case "green": return 0;
+                case "yellow": return 1;
+                default: return 2;
             }
         }
 

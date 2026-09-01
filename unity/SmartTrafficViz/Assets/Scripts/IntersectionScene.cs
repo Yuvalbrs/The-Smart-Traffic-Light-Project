@@ -306,18 +306,36 @@ namespace SmartTraffic
             Paint(disc, new Color(0.09f, 0.26f, 0.60f));
 
             // Rotation about local Z is counter-clockwise seen from +Z, so -90 sends the arrow to
-            // local +X and +90 to local -X.
-            var angle = turn == 0 ? -90f : turn == 2 ? 90f : 0f;
+            // local +X (the driver's left) and +90 to local -X (their right).
+            //
+            // The rightmost lane carries TWO movements, not one: intersection.con.xml connects
+            // lane 0 to both the through edge and the right edge. A lone right arrow above it
+            // describes a right-turn-only lane that does not exist, and makes a through-bound car
+            // waiting there look like a stuck vehicle. Two arrows say what the lane actually is.
+            if (turn == 2)
+            {
+                AddArrow(sign, 0f, new Vector3(0.80f, 0f, 0.30f), 0.95f);    // straight
+                AddArrow(sign, 90f, new Vector3(-0.80f, 0f, 0.30f), 0.95f);  // right
+            }
+            else
+            {
+                AddArrow(sign, turn == 0 ? -90f : 0f, new Vector3(0f, 0f, 0.30f), 1.25f);
+            }
+        }
+
+        /// <summary>One white arrow glyph on a sign face.</summary>
+        /// <param name="offset">Local position. +Z, NOT -Z: local +Z faces the oncoming driver,
+        /// and on the far face the arrow only reads from behind the sign, mirrored. A Unity
+        /// cylinder is 2 units tall, so the disc's faces sit at local z = +-0.16; at +0.14 the
+        /// arrow sat INSIDE the disc and z-fought it into a blue-and-white mottle. Clear the
+        /// face.</param>
+        private static void AddArrow(Transform sign, float angle, Vector3 offset, float scale)
+        {
             var arrow = new GameObject("Arrow");
             arrow.transform.SetParent(sign);
-            // +Z, NOT -Z: local +Z faces the oncoming driver. Mounted on the far face the arrow is
-            // only visible from behind the sign, where left and right read mirrored.
-            // A Unity cylinder is 2 units tall, so localScale.y = 0.16 puts the disc's faces at
-            // local z = +-0.16. At +0.14 the arrow sat INSIDE the disc and z-fought with it,
-            // which renders as a blue-and-white mottle rather than a white arrow. Clear the face.
-            arrow.transform.localPosition = new Vector3(0f, 0f, 0.30f);
+            arrow.transform.localPosition = offset;
             arrow.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
-            arrow.transform.localScale = Vector3.one * 1.25f;
+            arrow.transform.localScale = Vector3.one * scale;
             arrow.AddComponent<MeshFilter>().sharedMesh = ArrowMesh;
             arrow.AddComponent<MeshRenderer>();
             // Emissive, not just white: the arrow is a vertical face with a horizontal normal, so
