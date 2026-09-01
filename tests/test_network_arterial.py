@@ -24,7 +24,7 @@ from sumolib import checkBinary
 
 from scripts.build_network import (
     ARTERIAL,
-    _VAULT_MOVEMENTS,
+    MOVEMENTS_SPEC,
     assert_net_offset,
     build_net,
     observed_links,
@@ -50,9 +50,10 @@ EXPECTED_LINKS_C2: list[tuple[int, str, str]] = [
     (12, "c1_c2_0", "c2_s2"), (13, "c1_c2_0", "c2_e2"), (14, "c1_c2_1", "c2_e2"), (15, "c1_c2_2", "c2_n2"),
 ]
 
-_needs_vault = pytest.mark.skipif(
-    not _VAULT_MOVEMENTS.exists(), reason="vault movements.yaml absent (e.g. CI box)"
-)
+# Was a skipif on the vault copy's existence. The spec now ships in the repo
+# (config/movements.yaml), so its absence is a broken checkout, not an environment to tolerate -
+# and this skip is exactly why nothing caught the runtime depending on a folder outside the repo.
+_needs_vault = pytest.mark.skipif(False, reason="movements spec ships in-repo")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -64,7 +65,7 @@ def _built_net() -> None:
 @pytest.fixture(scope="module")
 def binding() -> dict:
     """Regenerate the arterial binding yaml from the freshly built net."""
-    movements = yaml.safe_load(_VAULT_MOVEMENTS.read_text(encoding="utf-8"))["movements"]
+    movements = yaml.safe_load(MOVEMENTS_SPEC.read_text(encoding="utf-8"))["movements"]
     write_binding_file(ARTERIAL, resolve_bindings(ARTERIAL, movements))
     return yaml.safe_load(ARTERIAL.binding_file.read_text(encoding="utf-8"))
 
@@ -108,7 +109,7 @@ def test_binding_yaml_has_both_tls(binding: dict) -> None:
 @_needs_vault
 def test_wiring_conforms_to_movements_spec(binding: dict) -> None:
     """Both TLS must assert clean against the authoritative movements.yaml."""
-    movements = yaml.safe_load(_VAULT_MOVEMENTS.read_text(encoding="utf-8"))["movements"]
+    movements = yaml.safe_load(MOVEMENTS_SPEC.read_text(encoding="utf-8"))["movements"]
     bindings = resolve_bindings(ARTERIAL, movements)  # raises on any mis-wiring
     assert bindings == {t: binding[t]["link_indices"] for t in ("C1", "C2")}
 

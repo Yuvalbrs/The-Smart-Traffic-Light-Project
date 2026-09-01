@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 from scripts.build_network import (
-    _VAULT_MOVEMENTS,
+    MOVEMENTS_SPEC,
     assert_net_offset,
     assert_wiring,
     build_net,
@@ -55,12 +55,9 @@ def test_twelve_incoming_lanes_present() -> None:
     assert lanes == {f"{e}_{i}" for e in ("n_t", "e_t", "s_t", "w_t") for i in range(3)}
 
 
-@pytest.mark.skipif(
-    not _VAULT_MOVEMENTS.exists(), reason="vault movements.yaml absent (e.g. CI box)"
-)
 def test_wiring_conforms_to_movements_spec() -> None:
     """The net wiring must assert clean against the authoritative movements.yaml."""
-    movements = yaml.safe_load(_VAULT_MOVEMENTS.read_text(encoding="utf-8"))["movements"]
+    movements = yaml.safe_load(MOVEMENTS_SPEC.read_text(encoding="utf-8"))["movements"]
     binding = assert_wiring(movements, observed_links())
     assert len(binding) == 12
     assert binding["M0"] == [3]      # N left (dedicated leftmost lane)

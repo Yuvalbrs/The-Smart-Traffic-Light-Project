@@ -23,7 +23,7 @@ import numpy as np
 from src.env.intersection import (
     N_MOVEMENTS,
     N_PHASES,
-    _VAULT_MOVEMENTS,
+    MOVEMENTS_SPEC,
     load_phase_movements,
     unsquash_pressures,
 )
@@ -46,7 +46,7 @@ class MaxPressureController:
         }
 
     @classmethod
-    def from_spec(cls, movements_path: str | Path = _VAULT_MOVEMENTS) -> "MaxPressureController":
+    def from_spec(cls, movements_path: str | Path = MOVEMENTS_SPEC) -> "MaxPressureController":
         """Build the controller from the ``movements.yaml`` SSOT (no live SUMO)."""
         return cls(load_phase_movements(movements_path))
 

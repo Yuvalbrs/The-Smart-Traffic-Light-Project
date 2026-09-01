@@ -32,7 +32,7 @@ from pathlib import Path
 import traci
 from sumolib import checkBinary
 
-from src.env.intersection import _VAULT_MOVEMENTS, Intersection
+from src.env.intersection import MOVEMENTS_SPEC, Intersection
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _NET_DIR = _REPO_ROOT / "config" / "network"
@@ -72,7 +72,7 @@ def build_actuated_add(
     *,
     out_path: Path = _ADD_FILE,
     net_file: Path = _NET_FILE,
-    movements_path: Path = _VAULT_MOVEMENTS,
+    movements_path: Path = MOVEMENTS_SPEC,
 ) -> Path:
     """Build and write the actuated additional-file; return its path."""
     traci.start([checkBinary("sumo"), "-n", str(net_file), "--no-step-log", "true"])
@@ -140,7 +140,7 @@ def build_actuated_add(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--movements", type=Path, default=_VAULT_MOVEMENTS)
+    parser.add_argument("--movements", type=Path, default=MOVEMENTS_SPEC)
     args = parser.parse_args()
     out = build_actuated_add(movements_path=args.movements)
     print(f"[actuated] wrote {out.relative_to(_REPO_ROOT)}")

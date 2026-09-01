@@ -33,16 +33,22 @@ _BINDING_FILE = _REPO_ROOT / "config" / "network" / "link_index_binding.yaml"
 # The logical movement/phase spec is the vault SSOT (anti-drift rule: the code
 # repo does not vendor a copy - same coupling as scripts/build_network.py).
 # Override via the constructor for CI portability.
-_VAULT_MOVEMENTS = Path(
-    r"C:\Year3\Obsidian\Yuval\30_Projects\smart-traffic-rl\specs\movements.yaml"
-)
+# The movement + NEMA phase spec. Authored in the Obsidian vault (the SSOT for the written
+# design) and SHIPPED HERE, because the runtime must not depend on a folder outside the repo.
+#
+# It used to point at C:\Year3\Obsidian\... directly. build_net() is called on EVERY live
+# session start, so on any machine but the author's - a clone, a marker's laptop, CI - every
+# episode died with FileNotFoundError before it began, for every controller including the
+# baselines that need no checkpoint. tests/test_network.py has always skipped when the vault was
+# absent, so nothing caught it. tests/test_movements_spec.py now proves the two copies agree.
+MOVEMENTS_SPEC = _REPO_ROOT / "config" / "movements.yaml"
 
 N_MOVEMENTS = 12
 N_PHASES = 8
 
 
 def load_phase_movements(
-    movements_path: str | Path = _VAULT_MOVEMENTS,
+    movements_path: str | Path = MOVEMENTS_SPEC,
 ) -> dict[int, tuple[int, ...]]:
     """Map each action (0..7) to the canonical movement indices (0..11) it greens.
 
@@ -163,7 +169,7 @@ class Intersection:
         conn: Any,
         tls_id: str,
         *,
-        movements_path: str | Path = _VAULT_MOVEMENTS,
+        movements_path: str | Path = MOVEMENTS_SPEC,
         binding_path: str | Path = _BINDING_FILE,
     ) -> "Intersection":
         """Build the model from the live connection + the spec/binding files.
