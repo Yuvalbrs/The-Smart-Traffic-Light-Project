@@ -28,6 +28,14 @@ namespace SmartTraffic
         [Tooltip("ws/unity endpoint of the FastAPI hub.")]
         public string Url = "ws://127.0.0.1:8000/ws/unity";
 
+        /// <summary>Latest hub session state, pushed in by AppShell's one-a-second poll.
+        ///
+        /// The socket stays happily connected after an episode ends, so the 3-D view simply froze
+        /// on its last frame - visually identical to a stalled connection, with the HUD still
+        /// reading "connected". A frozen picture the viewer cannot explain is the one thing a live
+        /// demo cannot afford, so the HUD now says WHY it stopped.</summary>
+        public string SessionState = "unknown";
+
         [Header("Interpolation")]
         [Tooltip("Fallback gap between frames before two have been seen, in seconds.")]
         public float DefaultInterval = 1.0f;
@@ -303,9 +311,37 @@ namespace SmartTraffic
 
         private void OnGUI()
         {
-            var status = _socket == null ? "no socket"
-                : _socket.Connected ? "connected"
-                : "connecting" + (_socket.LastError != null ? " (" + _socket.LastError + ")" : "");
+            string status;
+            if (_socket == null) status = "no socket";
+            else if (!_socket.Connected)
+                status = "connecting" + (_socket.LastError != null ? " (" + _socket.LastError + ")" : "");
+            else
+            {
+                // Connected. Whether frames are still coming is a property of the SESSION, not the
+                // socket - so name the session state rather than let a frozen scene read "connected".
+                switch (SessionState)
+                {
+                    case "running":
+                    case "starting":
+                        status = "connected - streaming";
+                        break;
+                    case "finished":
+                        status = "connected - episode finished (no more frames)";
+                        break;
+                    case "stopped":
+                        status = "connected - episode stopped (no more frames)";
+                        break;
+                    case "failed":
+                        status = "connected - episode FAILED (no more frames)";
+                        break;
+                    case "none":
+                        status = "connected - no session running";
+                        break;
+                    default:
+                        status = "connected";
+                        break;
+                }
+            }
 
             var simTime = _latest != null ? _latest.SimTime.ToString("F0") + " s" : "-";
             var phase = _latest?.Payload?.Signal != null ? "P" + _latest.Payload.Signal.PhaseIndex : "-";

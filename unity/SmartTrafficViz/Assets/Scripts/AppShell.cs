@@ -43,6 +43,13 @@ namespace SmartTraffic
             {
                 _nextPoll = Time.unscaledTime + 1f;
                 _session?.Refresh();
+                // The live view has no session poll of its own; hand it the state so its HUD can
+                // tell "episode finished" apart from "the feed died".
+                if (_session != null)
+                {
+                    if (_viz != null) _viz.SessionState = _session.State;
+                    if (_dash != null) _dash.SessionState = _session.State;
+                }
             }
 
             if (Current == Screen.Live && Input.GetKeyDown(KeyCode.Tab)) _overlay = !_overlay;

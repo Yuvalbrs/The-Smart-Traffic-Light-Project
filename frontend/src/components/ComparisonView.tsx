@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ApiError, getComparison } from "../lib/api";
+import { ApiError, getComparison, getControllers } from "../lib/api";
 import type { ComparisonKpi, ComparisonResponse, ComparisonRow } from "../lib/api";
 
-const SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
+// The hub owns the scenario list (GET /controllers). This used to be a hard-coded five, which
+// silently hid SCN-06..10 and SCN-R1 even once a user model had been evaluated on them - one of
+// three separate copies of this list that had already drifted apart.
+const FALLBACK_SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
 
 function formatKpi(key: string, value: number | null): string {
   if (value == null) return "—";
@@ -41,9 +44,25 @@ const CHARTED_KPIS = [
 
 export function ComparisonView() {
   const [scenario, setScenario] = useState("SCN-05");
+  const [scenarios, setScenarios] = useState<string[]>(FALLBACK_SCENARIOS);
   const [data, setData] = useState<ComparisonResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // If the hub is unreachable the fallback list still renders a usable picker.
+  useEffect(() => {
+    let cancelled = false;
+    getControllers()
+      .then((opts) => {
+        if (!cancelled && opts.scenarios.length > 0) setScenarios(opts.scenarios);
+      })
+      .catch(() => {
+        // the comparison fetch below surfaces the connection error already
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +91,7 @@ export function ComparisonView() {
       <label>
         scenario
         <select value={scenario} onChange={(e) => setScenario(e.target.value)}>
-          {SCENARIOS.map((s) => (
+          {scenarios.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>

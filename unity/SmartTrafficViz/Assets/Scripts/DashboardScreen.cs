@@ -29,6 +29,11 @@ namespace SmartTraffic
         private readonly DashboardFeed _feed;
         private DashboardFrame _latest;
 
+        /// <summary>Latest hub session state, pushed in by AppShell's poll. See the note in
+        /// TrafficViz: after an episode ends the socket stays open and the tiles simply stop
+        /// changing, which is indistinguishable from a dead feed unless we say so.</summary>
+        public string SessionState = "unknown";
+
         public DashboardScreen(string wsUnityUrl)
         {
             // ws://host/ws/unity -> ws://host/ws/dashboard, so the two clients can never be
@@ -81,6 +86,16 @@ namespace SmartTraffic
             y = DrawPhase(x, y, inner, _latest);
             y = DrawMovementBars(x, y, inner, "Queue per movement (vehicles)", _latest.QueueLengths);
             y = DrawForecast(x, y, inner, _latest);
+
+            // Tiles keep their last values after an episode ends, which reads exactly like a dead
+            // feed. Name the session state so a stopped dashboard is legible rather than alarming.
+            var ended = SessionState == "finished" || SessionState == "stopped" || SessionState == "failed";
+            if (ended)
+            {
+                GUI.Label(new Rect(x, box.yMax - 52f, inner, 20f),
+                    "Episode " + SessionState + " - values below are the final ones, not a stalled feed.",
+                    UITheme.Hint);
+            }
 
             GUI.Label(new Rect(x, box.yMax - 30f, inner, 20f),
                 $"sim t={_latest.SimTime:0}s   frame #{_latest.Seq}   received={_feed.Received}   " +

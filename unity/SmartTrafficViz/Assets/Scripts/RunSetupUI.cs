@@ -27,7 +27,13 @@ namespace SmartTraffic
         /// the controller list from GET /controllers, so fetching them at startup would remove
         /// the duplication entirely. Not done before the deadline because it changes the startup
         /// path of the screen the whole demo runs through; recorded as the obvious next cleanup.
-        /// Only SCN-A1..A4 are deliberately absent - they need the two-junction network.</summary>
+        /// Only SCN-A1..A4 are deliberately absent - they need the two-junction network.
+        ///
+        /// It DID drift: SCN-R1 shipped in the hub and never arrived here, so the measured-demand
+        /// scenario was unreachable from Unity. Until the fetch-at-startup cleanup happens,
+        /// tests/test_client_scenario_lists.py fails the build whenever this list and the hub's
+        /// disagree - a hand-synced list with no alarm on it drifts silently, which is how this
+        /// one broke.</summary>
         public static readonly Scene[] Scenes =
         {
             new Scene("SCN-01", "Uniform light", "Low, symmetric demand. The easy regime."),
@@ -40,6 +46,7 @@ namespace SmartTraffic
             new Scene("SCN-08", "Fast-shifting", "Anti-phase, 300 s period; split swings 100..600."),
             new Scene("SCN-09", "Moderate fast-shifting", "Anti-phase, 300 s period, 200..500/axis."),
             new Scene("SCN-10", "Fast-shifting (training)", "Anti-phase, 240 s period, 120..560/axis."),
+            new Scene("SCN-R1", "Hangzhou (measured)", "Real measured counts, not a formula."),
         };
 
         /// <summary>Mirrors CONTROLLERS in src/api/live.py.</summary>

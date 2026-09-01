@@ -3,6 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import {
   ApiError,
   WS_BASE,
+  getControllers,
   getCurrentEvaluation,
   getCurrentTraining,
   getModels,
@@ -22,7 +23,8 @@ import type {
 
 const POLL_MS = 2000;
 const MAX_EPISODES = 300;
-const EVAL_SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
+// Used only until GET /controllers answers; the hub owns the real list.
+const FALLBACK_EVAL_SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
 const MAX_EVAL_SEEDS = 15;
 
 type SocketState = "connecting" | "open" | "closed";
@@ -49,6 +51,11 @@ export function TrainingPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  // A 404 means "no job yet"; anything else means the hub is unreachable or broken. Swallowing
+  // both rendered them identically as "no training job started yet", which is a lie when the
+  // server is down - the one state a demo most needs to see.
+  const [hubError, setHubError] = useState<string | null>(null);
+  const [evalScenarios, setEvalScenarios] = useState<string[]>(FALLBACK_EVAL_SCENARIOS);
 
   // Mutated only from effect/socket callbacks (never during render) so the poll fallback below
   // can check "is the socket open right now" without forcing a re-render on every ws state flip.
@@ -69,6 +76,30 @@ export function TrainingPanel() {
   const [evalStopping, setEvalStopping] = useState(false);
   const evalWsStateRef = useRef<SocketState>("connecting");
 
+  // 404 is the expected "nothing running" answer and clears the banner; every other failure is a
+  // real one and must be shown rather than swallowed.
+  const noteHubError = (e: unknown) => {
+    if (e instanceof ApiError && e.status === 404) {
+      setHubError(null);
+      return;
+    }
+    setHubError(e instanceof ApiError ? e.detail : String(e));
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    getControllers()
+      .then((opts) => {
+        if (!cancelled && opts.scenarios.length > 0) setEvalScenarios(opts.scenarios);
+      })
+      .catch(() => {
+        // the hub banner below already reports an unreachable server
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load whatever training job already exists (if any) and keep a live socket open for updates.
   useEffect(() => {
     let cancelled = false;
@@ -77,10 +108,13 @@ export function TrainingPanel() {
 
     getCurrentTraining()
       .then((s) => {
-        if (!cancelled) setStatus(s);
+        if (!cancelled) {
+          setStatus(s);
+          setHubError(null);
+        }
       })
-      .catch(() => {
-        // 404: no training job has ever started - status stays null.
+      .catch((e) => {
+        if (!cancelled) noteHubError(e);
       });
 
     const connect = () => {
@@ -120,10 +154,11 @@ export function TrainingPanel() {
     const id = setInterval(() => {
       if (wsStateRef.current === "open") return;
       getCurrentTraining()
-        .then((s) => setStatus(s))
-        .catch(() => {
-          // nothing running yet, or a transient error - keep the last known status displayed
-        });
+        .then((s) => {
+          setStatus(s);
+          setHubError(null);
+        })
+        .catch(noteHubError);
     }, POLL_MS);
     return () => clearInterval(id);
   }, []);
@@ -158,10 +193,13 @@ export function TrainingPanel() {
 
     getCurrentEvaluation()
       .then((s) => {
-        if (!cancelled) setEvalStatus(s);
+        if (!cancelled) {
+          setEvalStatus(s);
+          setHubError(null);
+        }
       })
-      .catch(() => {
-        // 404: no evaluation has ever started - status stays null.
+      .catch((e) => {
+        if (!cancelled) noteHubError(e);
       });
 
     const connect = () => {
@@ -409,7 +447,8 @@ export function TrainingPanel() {
           )}
         </div>
       )}
-      {!status && <p className="control-note">no training job started yet</p>}
+      {hubError && <p className="error-text">cannot reach the hub - {hubError}</p>}
+      {!status && !hubError && <p className="control-note">no training job started yet</p>}
 
       <div className="models-section">
         <h3>Trained models</h3>
@@ -463,7 +502,7 @@ export function TrainingPanel() {
                           <label>
                             scenario
                             <select value={evalScenario} onChange={(e) => setEvalScenario(e.target.value)}>
-                              {EVAL_SCENARIOS.map((s) => (
+                              {evalScenarios.map((s) => (
                                 <option key={s} value={s}>
                                   {s}
                                 </option>

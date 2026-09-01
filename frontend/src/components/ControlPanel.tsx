@@ -18,15 +18,29 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
   const [session, setSession] = useState<SessionStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A rejected /controllers call used to leave `options` null forever, and the whole form sits
+  // behind `{options && ...}` - so with the hub down this panel rendered blank and said nothing.
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    getControllers().then((opts) => {
-      setOptions(opts);
-      setController(opts.default.controller);
-      setScenario(opts.default.scenario);
-      setSeed(opts.default.seed);
-    });
-  }, []);
+    let cancelled = false;
+    setOptionsError(null);
+    getControllers()
+      .then((opts) => {
+        if (cancelled) return;
+        setOptions(opts);
+        setController(opts.default.controller);
+        setScenario(opts.default.scenario);
+        setSeed(opts.default.seed);
+      })
+      .catch((e) => {
+        if (!cancelled) setOptionsError(e instanceof ApiError ? e.detail : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +104,13 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
   return (
     <div className="panel control-panel">
       <h2>Session control</h2>
+      {!options && optionsError && (
+        <div className="control-offline">
+          <p className="error-text">cannot reach the hub - {optionsError}</p>
+          <button onClick={() => setReloadKey((k) => k + 1)}>retry</button>
+        </div>
+      )}
+      {!options && !optionsError && <p className="control-note">loading options...</p>}
       {options && (
         <div className="control-form">
           <label>
