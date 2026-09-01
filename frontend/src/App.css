@@ -223,3 +223,79 @@
     grid-template-columns: 1fr;
   }
 }
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.tab-button {
+  border-radius: 6px 6px 0 0;
+}
+
+.tab-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.training-panel,
+.comparison-view {
+  grid-column: 1 / -1;
+}
+
+.training-status {
+  margin-top: 16px;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.state-done {
+  color: var(--chart-throughput);
+}
+
+.state-cancelled {
+  color: var(--text-muted);
+}
+
+.comparison-table {
+  margin-top: 12px;
+}
+
+.numeric-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+.best-cell {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ours-row td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}

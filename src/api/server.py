@@ -4,6 +4,12 @@ Routes::
 
     GET    /health                  liveness + loop lag + per-channel backpressure counters
     GET    /controllers             what can be driven, and on which scenarios
+    GET    /models                  every trained model on disk (see :mod:`src.api.catalog`)
+    GET    /comparison              per-controller KPIs on one scenario, from the database
+    POST   /training                start a training job (409 if one is already running)
+    GET    /training/current        progress of the running / last training job
+    DELETE /training/current        cancel the running training job
+    WS     /ws/training             live training progress frames
     POST   /sessions                start a live episode  (409 if one is already running)
     GET    /sessions/current        status of the running / last session
     DELETE /sessions/current        stop the running session
@@ -28,11 +34,14 @@ from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from src.api.catalog import router as catalog_router
 from src.api.hub import MAX_QUEUE, Hub
 from src.api.live import CONTROLLERS, SessionBusyError, SessionManager
 from src.api.replay import router as replay_router
+from src.api.training import MAX_UI_EPISODES, VARIANTS, TrainingBusyError, TrainingManager
 from src.api.wire import SCHEMA_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,15 +67,34 @@ class StartSession(BaseModel):
     )
 
 
+class StartTraining(BaseModel):
+    """Body of ``POST /training``."""
+
+    variant: str = Field("plain", description="plain | hybrid | random-lstm")
+    seed: int = Field(42, ge=0, description="training seed; hybrid loads THIS seed's forecaster")
+    episodes: int = Field(
+        30, ge=1, le=MAX_UI_EPISODES,
+        description=f"episodes to train (1-{MAX_UI_EPISODES}); 30 is a demo, 300 the full protocol",
+    )
+    episode_length_s: int | None = Field(
+        None, ge=60, le=3600, description="shorten each episode for a faster demo run"
+    )
+    label: str | None = Field(None, max_length=80, description="free-text label for this run")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Bind the hubs to the running event loop and open the results database."""
     loop = asyncio.get_running_loop()
     app.state.unity_hub.bind_loop(loop)
     app.state.dash_hub.bind_loop(loop)
+    app.state.training_hub.bind_loop(loop)
     yield
     manager: SessionManager = app.state.sessions
     manager.stop()
+    # A training child process outlives its parent unless it is asked to stop, which would leave
+    # an orphan holding a SUMO instance and a run directory after the server is gone.
+    app.state.training.stop()
 
 
 def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None) -> FastAPI:
@@ -98,7 +126,9 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     )
     app.state.unity_hub = Hub("unity")
     app.state.dash_hub = Hub("dash")
+    app.state.training_hub = Hub("training")
     app.state.sessions = SessionManager(app.state.unity_hub, app.state.dash_hub)
+    app.state.training = TrainingManager(app.state.training_hub)
     app.state.trace_dirs = list(trace_dirs) if trace_dirs is not None else list(_TRACE_DIRS)
     path = Path(db_path) if db_path is not None else _DB_PATH
     # Create the engine unconditionally: SQLite makes the file on first write, and gating
@@ -109,6 +139,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     app.state.engine = create_db_engine(path)
     app.state.db_path = path
     app.include_router(replay_router)
+    app.include_router(catalog_router)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -126,7 +157,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                     "dropped": hub.dropped_total,
                     "queue_maxsize": MAX_QUEUE,
                 }
-                for hub in (app.state.dash_hub, app.state.unity_hub)
+                for hub in (app.state.dash_hub, app.state.unity_hub, app.state.training_hub)
             },
         }
 
@@ -193,6 +224,60 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         response.status_code = 204
         return None
 
+
+    @app.post("/training", status_code=201)
+    def start_training(body: StartTraining) -> dict[str, Any]:
+        """Start one training job as a child process. 409 while another is running.
+
+        A live episode may run at the same time: the job is a separate process with its own
+        libsumo, so the single-instance rule that serializes live sessions does not apply here.
+        Both will simply be slower while they share the machine.
+        """
+        if body.variant not in VARIANTS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown variant {body.variant}; expected one of {list(VARIANTS)}",
+            )
+        try:
+            status = app.state.training.start(
+                variant=body.variant,
+                seed=body.seed,
+                episodes=body.episodes,
+                episode_length_s=body.episode_length_s,
+                label=body.label,
+            )
+        except TrainingBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, KeyError) as exc:
+            # KeyError is the per-seed forecaster pin refusing an unpinned seed (A6.4) - a 422,
+            # not a 500: the request named a seed the project has no forecaster for.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return status.as_dict()
+
+    @app.get("/training/current")
+    def current_training() -> dict[str, Any]:
+        """Progress of the running (or most recent) training job."""
+        job = app.state.training.current
+        if job is None:
+            raise HTTPException(status_code=404, detail="no training job has been started")
+        return job.status.as_dict()
+
+    @app.delete("/training/current")
+    def stop_training(response: Response) -> dict[str, Any] | None:
+        """Cancel the running training job.
+
+        Mirrors DELETE /sessions/current: 204 once the child is gone, 202 while it is still
+        unwinding inside a native SUMO call.
+        """
+        outcome = app.state.training.stop()
+        if outcome is False:
+            raise HTTPException(status_code=404, detail="no training job is running")
+        if outcome is None:
+            response.status_code = 202
+            return {"status": "stopping", "detail": "cancel requested; the job has not exited yet"}
+        response.status_code = 204
+        return None
+
     async def _pump(websocket: WebSocket, hub: Hub, name: str) -> None:
         """Relay one hub's frames to one client until it disconnects."""
         await websocket.accept()
@@ -220,6 +305,22 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     async def ws_unity(websocket: WebSocket) -> None:
         """1 Hz raw ``sim_frame`` envelopes - the same frames the JSONL trace records."""
         await _pump(websocket, app.state.unity_hub, "unity")
+
+
+    @app.websocket("/ws/training")
+    async def ws_training(websocket: WebSocket) -> None:
+        """Training progress frames, one per completed episode."""
+        await _pump(websocket, app.state.training_hub, "training")
+
+
+    # The built single-page app is mounted LAST and only if it exists. Mounting at "/" catches
+    # every path not already claimed above, so registering it earlier would shadow the whole API;
+    # and a missing dist/ must leave the API perfectly usable, because that is the state during
+    # frontend development, when Vite serves the SPA on its own port instead.
+    dist = _REPO_ROOT / "frontend" / "dist"
+    if dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="app")
+    app.state.spa_dir = dist if dist.is_dir() else None
 
     return app
 
