@@ -153,6 +153,12 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
+        "--source", choices=("csv", "db"), default="csv",
+        help="where the corpus comes from: the CSV directory, or the results database "
+             "(ingest it with scripts/ingest_lstm_corpus.py). Both yield identical tensors - "
+             "asserted in tests - so this is an operational choice, not a modelling one.",
+    )
+    parser.add_argument(
         "--target-offsets", default=",".join(map(str, DEFAULT_TARGET_OFFSETS)),
         help="forecast points as steps ahead, comma-separated (default 6,9,12 = 60/90/120s)",
     )
@@ -166,10 +172,11 @@ def main() -> None:
         )
     torch.manual_seed(args.seed)  # deterministic weight init
     loaders = make_dataloaders(
-        _DATA_DIR, batch_size=args.batch, target_offsets=offsets, shuffle_seed=args.seed
+        _DATA_DIR, batch_size=args.batch, target_offsets=offsets, shuffle_seed=args.seed,
+        source=args.source,
     )
     sizes = {k: len(v.dataset) for k, v in loaders.items()}
-    print(f"[lstm-train] windows: {sizes}")
+    print(f"[lstm-train] windows: {sizes}  (corpus source: {args.source})")
     print(f"[lstm-train] splits:  " + " | ".join(f"{k}={','.join(v)}" for k, v in sorted(SPLITS.items())))
 
     model = LSTMForecaster()
