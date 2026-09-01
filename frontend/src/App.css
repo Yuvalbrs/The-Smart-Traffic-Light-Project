@@ -299,3 +299,22 @@
 .ours-row td:first-child {
   box-shadow: inset 3px 0 0 var(--accent);
 }
+
+/* Comparison: gridlock context + one chart per KPI (see ComparisonView.tsx). */
+.comparison-table .gridlock-high {
+  color: var(--warn, #d98a78);
+  font-weight: 600;
+}
+.comparison-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  margin-top: 18px;
+}
+.comparison-chart h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+}

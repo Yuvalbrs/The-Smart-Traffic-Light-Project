@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ApiError, getComparison } from "../lib/api";
 import type { ComparisonKpi, ComparisonResponse, ComparisonRow } from "../lib/api";
 
@@ -24,6 +24,12 @@ function bestValues(rows: ComparisonRow[], kpis: ComparisonKpi[]): Record<string
 }
 
 /** Confirmatory KPI comparison across controllers for one scenario (GET /comparison). */
+/** The two headline KPIs, each charted on its own axis (see the comment at the charts). */
+const CHARTED_KPIS = [
+  { key: "avg_waiting_time", title: "Avg wait (s) - lower is better", fill: "var(--chart-wait)" },
+  { key: "throughput", title: "Throughput (veh/h) - higher is better", fill: "var(--chart-throughput)" },
+] as const;
+
 export function ComparisonView() {
   const [scenario, setScenario] = useState("SCN-05");
   const [data, setData] = useState<ComparisonResponse | null>(null);
@@ -75,6 +81,7 @@ export function ComparisonView() {
               <tr>
                 <th>controller</th>
                 <th className="numeric-cell">episodes</th>
+                <th className="numeric-cell">gridlocked</th>
                 {data.kpis.map((k) => (
                   <th key={k.key} className="numeric-cell">
                     {k.label} {k.lower_is_better ? "↓" : "↑"}
@@ -87,6 +94,18 @@ export function ComparisonView() {
                 <tr key={row.controller} className={row.is_ours ? "ours-row" : ""}>
                   <td>{row.label}</td>
                   <td className="numeric-cell">{row.n_episodes}</td>
+                  {/* Shown beside the KPIs, not among them: a controller that gridlocks most of
+                      its episodes can post a flattering wait by never clearing the queue, so the
+                      rate is the context that stops the rest of the row being read at face value.
+                      Deliberately not eligible for a "best" marker - it is not a KPI to win on. */}
+                  <td
+                    className={
+                      "numeric-cell" +
+                      (row.gridlock_rate != null && row.gridlock_rate >= 0.5 ? " gridlock-high" : "")
+                    }
+                  >
+                    {row.gridlock_rate == null ? "-" : `${Math.round(row.gridlock_rate * 100)}%`}
+                  </td>
                   {data.kpis.map((k) => {
                     const value = (row as unknown as Record<string, unknown>)[k.key];
                     const numeric = typeof value === "number" ? value : null;
@@ -103,24 +122,36 @@ export function ComparisonView() {
           </table>
           {data.note && <p className="control-note">{data.note}</p>}
 
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart
-              data={data.rows.map((r) => ({
-                controller: r.label,
-                avg_waiting_time: r.avg_waiting_time,
-                throughput: r.throughput,
-              }))}
-            >
-              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-              <XAxis dataKey="controller" fontSize={11} />
-              <YAxis yAxisId="wait" fontSize={11} />
-              <YAxis yAxisId="throughput" orientation="right" fontSize={11} />
-              <Tooltip />
-              <Legend />
-              <Bar yAxisId="wait" dataKey="avg_waiting_time" name="avg wait (s)" fill="var(--chart-wait)" />
-              <Bar yAxisId="throughput" dataKey="throughput" name="throughput (veh/h)" fill="var(--chart-throughput)" />
-            </BarChart>
-          </ResponsiveContainer>
+          {/* One chart per KPI, each with its own axis. A single plot carrying both put
+              seconds and vehicles-per-hour on axes three orders of magnitude apart, which
+              rendered the wait bars as slivers and invited a comparison between two
+              quantities that share no unit. */}
+          <div className="comparison-charts">
+            {CHARTED_KPIS.map((kpi) => (
+              <div className="comparison-chart" key={kpi.key}>
+                <h4>{kpi.title}</h4>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart
+                    data={data.rows.map((r) => ({
+                      controller: r.label,
+                      value: (r as unknown as Record<string, unknown>)[kpi.key] as number | null,
+                    }))}
+                    margin={{ top: 8, right: 8, bottom: 8, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} vertical={false} />
+                    <XAxis dataKey="controller" fontSize={10} interval={0} angle={-20} textAnchor="end" height={70} />
+                    <YAxis fontSize={11} width={54} />
+                    <Tooltip
+                      formatter={(value) =>
+                        formatKpi(kpi.key, typeof value === "number" ? value : null)
+                      }
+                    />
+                    <Bar dataKey="value" name={kpi.title} fill={kpi.fill} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ))}
+          </div>
         </>
       )}
       {data && data.rows.length === 0 && <p className="control-note">no comparison data for this scenario yet</p>}
