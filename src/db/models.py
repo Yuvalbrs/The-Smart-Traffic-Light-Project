@@ -191,3 +191,44 @@ class VehicleSnapshot(Base):
     vehicle_count: Mapped[int] = mapped_column(Integer)
 
     episode: Mapped["Episode"] = relationship(back_populates="vehicle_snapshots")
+
+
+class DemandCount(Base):
+    """Measured traffic counts: vehicles entering one approach during one time bin.
+
+    The database was, until now, purely a SINK - every result the project produced flowed into it
+    and nothing flowed back out into a simulation. This table is the other direction: it holds
+    real, externally measured demand, and `scripts/build_routes.py` can generate a scenario's
+    traffic from it instead of from a formula in a YAML file.
+
+    Deliberately measurement-shaped rather than simulation-shaped: one row is "this many vehicles
+    entered this approach between these two times, according to this source". Whatever a dataset
+    calls its approaches is normalised to this project's N/E/S/W on the way in, so a second source
+    with different conventions costs an ingest script and nothing else. `source` keys a whole
+    dataset so several can coexist and be compared.
+    """
+
+    __tablename__ = "demand_count"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String, default=SCHEMA_VERSION)
+
+    #: Dataset key, e.g. "hangzhou_bc-tyc_18041607". Groups the rows of one measurement set.
+    source: Mapped[str] = mapped_column(String, index=True)
+    #: Where it came from, recorded per row so a number in a report can be traced to a URL.
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Licence / citation terms, because "no licence file, cite these papers" is itself a finding.
+    source_terms: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    approach: Mapped[str] = mapped_column(String, index=True)  # N | E | S | W
+    bin_start_s: Mapped[float] = mapped_column(Float)  # seconds from the start of the record
+    bin_end_s: Mapped[float] = mapped_column(Float)
+    vehicles: Mapped[int] = mapped_column(Integer)  # entering this approach in this bin
+
+    ingested_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    @property
+    def vehicles_per_hour(self) -> float:
+        """The bin's count expressed as a rate, which is what a demand profile consumes."""
+        span = self.bin_end_s - self.bin_start_s
+        return 0.0 if span <= 0 else self.vehicles * 3600.0 / span

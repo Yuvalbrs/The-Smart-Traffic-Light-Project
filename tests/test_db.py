@@ -48,6 +48,9 @@ def test_init_db_creates_all_tables(engine):
         "episode_kpi",
         "model_artifact",
         "vehicle_snapshot",
+        # Measured demand read back OUT of the database to drive a simulation - the one table
+        # that is a source rather than a sink.
+        "demand_count",
     }
 
 

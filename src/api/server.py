@@ -67,6 +67,10 @@ _TRACE_DIRS = [_REPO_ROOT / "data" / "live", _REPO_ROOT / "data" / "eval"]
 SCENARIOS = (
     "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
     "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
+    # Demand read from the demand_count table (measured, Hangzhou 1x1) rather than from a curve.
+    # Needs `python -m scripts.ingest_demand` to have been run; a session on it fails with a
+    # message saying so, which is the honest behaviour for a scenario whose data may be absent.
+    "SCN-R1",
 )
 
 

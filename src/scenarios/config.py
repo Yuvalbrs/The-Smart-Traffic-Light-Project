@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -33,6 +34,10 @@ _PROFILE_PARAMS: dict[str, tuple[str, ...]] = {
     "constant": ("vph",),
     "ramp": ("vph_start", "vph_end", "ramp_s"),
     "sinusoidal": ("vph_min", "vph_max", "period_s", "phase_offset_deg"),
+    # Measured demand. Carries no scalar parameters: its series is loaded from the demand_count
+    # table by `source` + `approaches`, so the numbers in a run trace to an ingested dataset
+    # rather than to a curve someone chose.
+    "tabular": (),
 }
 _TURNS = frozenset({"left", "through", "right"})
 
@@ -43,13 +48,48 @@ class ScenarioError(ValueError):
 
 @dataclass(frozen=True)
 class AxisDemand:
-    """Arrival-rate profile for one axis pair (N/S or E/W)."""
+    """Arrival-rate profile for one axis pair (N/S or E/W).
+
+    ``bins`` is populated only for the ``tabular`` profile, where the rate comes from MEASURED
+    counts rather than a formula - see :func:`load_measured_bins`.
+    """
 
     profile: str
     params: dict[str, float]
+    #: ``tabular`` only: which ingested dataset and which approaches make up this axis. The series
+    #: itself is fetched on FIRST USE, not at load time - ``load_all()`` globs every scenario file,
+    #: so an eager read would make merely listing the scenarios require a database, and a fresh
+    #: clone (which has none) could not even enumerate the synthetic ones.
+    source: str | None = None
+    approaches: tuple[str, ...] = ()
+
+    @property
+    def bins(self) -> tuple[tuple[float, float, float], ...]:
+        """Measured ``(start_s, end_s, veh_per_hour)`` rows, cached across calls."""
+        if self.profile != "tabular":
+            return ()
+        return _measured_bins(self.source or "", self.approaches)
 
     def rate_at(self, t: float) -> float:
         """Instantaneous arrival rate (veh/h) at sim-time ``t`` seconds."""
+        if self.profile == "tabular":
+            bins = self.bins
+            if not bins:
+                raise ScenarioError(
+                    f"no measured demand for source {self.source!r} approaches "
+                    f"{list(self.approaches)}. Ingest it: "
+                    f"python -m scripts.ingest_demand --file <flow.json>"
+                )
+            # Step, not interpolate. Each row is a COUNT over a closed interval - "37 vehicles
+            # between 300 s and 600 s" - so the rate is constant across the bin by construction.
+            # Interpolating would invent a within-bin shape the measurement does not contain.
+            for start, end, rate in bins:
+                if start <= t < end:
+                    return rate
+            # Past the end of the record: hold the last observed rate rather than drop to zero,
+            # so an episode longer than the data degrades into "more of the same" instead of
+            # into an empty road that would look like a simulator fault.
+            return bins[-1][2]
         p = self.params
         if self.profile == "constant":
             return p["vph"]
@@ -209,7 +249,72 @@ def _build_axis(raw: object, where: str, axis: str) -> AxisDemand:
     for key, val in params.items():
         if key != "phase_offset_deg" and val < 0:
             raise ScenarioError(f"{where}: demand.{axis}.{key} must be >= 0, got {val}")
+    if profile == "tabular":
+        source = raw.get("source")
+        approaches = raw.get("approaches")
+        if not isinstance(source, str) or not source:
+            raise ScenarioError(f"{where}: demand.{axis} (tabular) needs a 'source' dataset key")
+        if not isinstance(approaches, list) or not approaches:
+            raise ScenarioError(f"{where}: demand.{axis} (tabular) needs a non-empty 'approaches'")
+        # Shape is validated here; the data is read on first use (see AxisDemand.bins).
+        return AxisDemand(
+            profile=profile, params={}, source=source,
+            approaches=tuple(str(a) for a in approaches),
+        )
     return AxisDemand(profile=profile, params=params)
+
+
+@lru_cache(maxsize=32)
+def _measured_bins(source: str, approaches: tuple[str, ...]):
+    """Cached wrapper - the route generator asks for a rate thousands of times per episode."""
+    return load_measured_bins(source, list(approaches))
+
+
+def load_measured_bins(
+    source: str, approaches: list[str], db_path: Path | None = None
+) -> tuple[tuple[float, float, float], ...]:
+    """Measured arrival rate per time bin for one axis, read from the results database.
+
+    The per-approach counts are **averaged**, not summed, and that is not a detail:
+    ``scripts/build_routes.py`` gives EVERY approach on an axis the full axis rate
+    (``_APPROACH_AXIS``), so summing N and S here would double the traffic the dataset actually
+    recorded.
+
+    Imported lazily so that loading a scenario keeps working with no database present - only the
+    ``tabular`` profile needs one, and the other four profiles are pure arithmetic.
+    """
+    from sqlalchemy import func as _func, select
+    from sqlalchemy.orm import Session
+
+    from src.db.engine import create_db_engine
+    from src.db.models import DemandCount
+
+    path = db_path or (_REPO_ROOT / "data" / "traffic.db")
+    if not Path(path).exists():
+        raise ScenarioError(
+            f"tabular demand needs the results database at {path}, which does not exist. "
+            f"Run: python -m scripts.ingest_demand --file <flow.json>"
+        )
+
+    engine = create_db_engine(Path(path))
+    with Session(engine) as session:
+        rows = session.execute(
+            select(
+                DemandCount.bin_start_s,
+                DemandCount.bin_end_s,
+                _func.avg(DemandCount.vehicles),
+            )
+            .where(DemandCount.source == source, DemandCount.approach.in_(approaches))
+            .group_by(DemandCount.bin_start_s, DemandCount.bin_end_s)
+            .order_by(DemandCount.bin_start_s)
+        ).all()
+
+    out = []
+    for start, end, mean_vehicles in rows:
+        span = float(end) - float(start)
+        rate = 0.0 if span <= 0 else float(mean_vehicles) * 3600.0 / span
+        out.append((float(start), float(end), rate))
+    return tuple(out)
 
 
 def _is_number(v: object) -> bool:

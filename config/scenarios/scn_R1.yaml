@@ -1,0 +1,44 @@
+# SCN-R1 — Hangzhou, real measured demand
+#
+# The only scenario in this project whose traffic is MEASURED rather than chosen. Every other
+# scenario states a formula ("sinusoidal, 200-600 vph, 90 deg out of phase"); this one names a
+# dataset, and the arrival rates are read from the `demand_count` table at load time.
+#
+# Provenance: the Hangzhou 1x1 benchmark flow set (bc-tyc junction, 16 Apr 2018, 07:00-08:00),
+# the demand used by PressLight / MPLight / CityFlow / LibSignal. 1,848 vehicles over 3,592 s;
+# per approach N=411, E=352, S=721, W=364. Ingest it with:
+#
+#     python -m scripts.ingest_demand --file data/external/hangzhou_bc-tyc_18041607_flow.json
+#
+# Two honest caveats, both stated rather than smoothed over:
+#
+#  1. The benchmark signals only 8 movements - it treats right turns as unsignalised and omits
+#     them. This project's network has 12. The four right-turn movements therefore carry only
+#     the share `turn_split` assigns them, not a measured one.
+#  2. Demand here is per AXIS, and `build_routes._APPROACH_AXIS` gives both approaches on an axis
+#     the full axis rate. The loader therefore AVERAGES the measured approaches of each axis
+#     (N with S, E with W) rather than summing them - summing would double the real traffic.
+#     The consequence is that the strong N/S asymmetry in the source (721 vs 411) is flattened
+#     into one NS rate. Representing it properly needs per-approach demand, which is a schema
+#     change, and is recorded as future work rather than faked here.
+#
+# NOT part of the confirmatory set. The pre-registration is defined over SCN-01..05 and adding a
+# scenario to it after the fact would turn a pre-registered result into a post-hoc one.
+id: SCN-R1
+name: Hangzhou (measured)
+description: Real measured arrivals from the Hangzhou 1x1 benchmark, read from the demand database.
+duration_s: 3600
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+vehicle:
+  type: passenger
+  heavy_fraction: 0.0
+
+# The benchmark's own roadnet has 8 roadLinks: one through and one left per approach. Its right
+# turns are unsignalised and absent from the data, so this split is the project's default rather
+# than a measured one - the honest position, since the source cannot supply it.
+turn_split: {left: 0.2, through: 0.6, right: 0.2}
+
+demand:
+  ns: {profile: tabular, source: hangzhou_bc-tyc_18041607, approaches: [N, S]}
+  ew: {profile: tabular, source: hangzhou_bc-tyc_18041607, approaches: [E, W]}
