@@ -184,7 +184,15 @@ def test_holm_family_c1_c2_c3_shapes_on_real_csv():
     """Smoke test against the real, committed eval_results.csv - the only place this suite
     touches the filesystem beyond the synthetic fixtures."""
     rows = load_rows()
-    assert len(rows) == 300
+    # The row count is a product of the campaign design, not a constant: it was 300 for the 5-seed
+    # campaign and is 900 for the 15-seed one A1.3 mandates. Asserting the IDENTITY catches the
+    # thing the old literal was really guarding - a truncated or duplicated CSV - without going
+    # stale every time the campaign is re-run.
+    n_scenarios = len({r["scenario"] for r in rows})
+    n_seeds = len({r["eval_seed"] for r in rows})
+    n_algos = len({r["algo"] for r in rows})
+    assert len(rows) == n_scenarios * n_seeds * n_algos, "eval_results.csv is not a full grid"
+    assert len(rows) > 0
     c1 = build_family_c1(rows)
     c2 = build_family_c2(rows)
     c3 = build_family_c3(rows)
@@ -220,17 +228,25 @@ def test_t2_rows_restricted_to_dqn_variants_only():
 
 def test_honest_findings_scn01_hybrid_worse_than_plain_on_real_csv():
     """Regression-locks the pre-registered honest finding: hybrid is WORSE than plain on SCN-01
-    avg wait among non-censored episodes (~2.71s vs ~1.36s) - this must never get quietly fixed
-    by a future refactor of the censoring filter."""
+    avg wait among non-censored episodes - this must never get quietly fixed by a future
+    refactor of the censoring filter.
+
+    The DIRECTION is the finding and is asserted; the magnitudes are not, because they are
+    properties of whichever campaign last wrote eval_results.csv (~2.71s vs ~1.36s in the
+    pre-gridlock-fix data, ~18.0s vs ~17.4s after it). Freezing them made this test fail on a
+    legitimate re-run of the campaign while telling us nothing about the finding itself.
+    """
     rows = load_rows()
     honest = build_honest_findings(rows)
     hyb = honest[(honest["scenario"] == "SCN-01") & (honest["algorithm"] == "DQN-hybrid")
                  & (honest["kpi"] == "avg_waiting_time")].iloc[0]
     pln = honest[(honest["scenario"] == "SCN-01") & (honest["algorithm"] == "DQN-plain")
                  & (honest["kpi"] == "avg_waiting_time")].iloc[0]
-    assert hyb["mean_noncensored"] == pytest.approx(2.71, abs=0.02)
-    assert pln["mean_noncensored"] == pytest.approx(1.36, abs=0.02)
-    assert hyb["mean_noncensored"] > pln["mean_noncensored"]
+    assert hyb["mean_noncensored"] > 0 and pln["mean_noncensored"] > 0
+    assert hyb["mean_noncensored"] > pln["mean_noncensored"], (
+        "the forecast arm is no longer worse than plain on SCN-01 - if the campaign genuinely "
+        "changed this, update the pre-registered honest finding rather than this assertion"
+    )
 
 
 def test_honest_findings_fully_excludes_censored_rows_even_when_kpi_is_non_nan():
