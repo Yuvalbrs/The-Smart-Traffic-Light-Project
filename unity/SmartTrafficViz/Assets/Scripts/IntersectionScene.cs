@@ -238,9 +238,11 @@ namespace SmartTraffic
                 // inward (-axis), so that half lies along +side, and the kerb is at +HalfRoad.
                 var baseAt = axis * StopLine + side * (HalfRoad + 1.6f);
 
-                Slab(signals.gameObject, "Pole_" + approach,
-                    new Vector3(0.55f, poleH, 0.55f), baseAt + Vector3.up * (poleH / 2f), Metal)
-                    .transform.SetParent(signals);
+                // A round pole on a base plate rather than a square post. Signal poles are tubes,
+                // and a box post catching a hard edge of light is one of the things that made
+                // this read as a diagram rather than a street.
+                Post(signals, "Pole_" + approach, baseAt, 0.30f, poleH, Metal);
+                Post(signals, "PoleFoot_" + approach, baseAt, 0.62f, 0.7f, Metal);
 
                 Slab(signals.gameObject, "Beam_" + approach,
                     Size(axis, 0.4f, HalfRoad + 1.6f),
@@ -261,8 +263,27 @@ namespace SmartTraffic
                     // The housing. Deliberately oversized - a true 1.2 m head is a couple of
                     // pixels at the ~280 m camera range, and the aspect is the point of drawing it.
                     Slab(signals.gameObject, "Housing_" + id,
-                        new Vector3(2.1f, 6.4f, 1.3f), at + Vector3.up * (headTop - lampGap),
+                        Box(axis, 2.1f, 6.4f, 1.3f), at + Vector3.up * (headTop - lampGap),
                         new Color(0.12f, 0.13f, 0.14f)).transform.SetParent(signals);
+
+                    // A backboard around the aspects, as real heads have: it is what stops a lamp
+                    // washing out against whatever happens to be behind it.
+                    Slab(signals.gameObject, "Backboard_" + id,
+                        Box(axis, 2.9f, 7.4f, 0.18f),
+                        at + axis * 0.08f + Vector3.up * (headTop - lampGap),
+                        new Color(0.07f, 0.08f, 0.09f)).transform.SetParent(signals);
+
+                    // Visors. The hood over each aspect is the detail that most says "traffic
+                    // light" rather than "three coloured dots on a post", and it costs one slab
+                    // apiece: a thin lip standing proud of the head, just above each lamp.
+                    for (var lamp = 0; lamp < 3; lamp++)
+                    {
+                        Slab(signals.gameObject, "Visor_" + id + "_" + lamp,
+                            Box(axis, 2.4f, 0.16f, 1.6f),
+                            at + axis * 0.92f
+                               + Vector3.up * (headTop - lamp * lampGap + 0.92f),
+                            new Color(0.09f, 0.10f, 0.11f)).transform.SetParent(signals);
+                    }
 
                     var head = new SignalHead(mats)
                     {
@@ -442,6 +463,35 @@ namespace SmartTraffic
             return Mathf.Abs(axis.z) > 0.5f
                 ? new Vector3(across, 0.3f, along)
                 : new Vector3(along, 0.3f, across);
+        }
+
+        /// <summary>
+        /// <see cref="Size"/> with a real height: a box whose width runs ACROSS the approach and
+        /// whose depth runs ALONG it, for either axis.
+        ///
+        /// Needed because <c>Size</c> pins y to 0.3 - it was written for flat road markings - so
+        /// anything with height was previously given a fixed world-space size and came out rotated
+        /// 90 degrees on the east and west approaches.
+        /// </summary>
+        private static Vector3 Box(Vector3 axis, float across, float height, float along)
+        {
+            return Mathf.Abs(axis.z) > 0.5f
+                ? new Vector3(across, height, along)
+                : new Vector3(along, height, across);
+        }
+
+        /// <summary>A vertical cylinder: signal poles are tubes, not square posts.</summary>
+        private static void Post(Transform parent, string name, Vector3 at, float radius,
+            float height, Color color)
+        {
+            var post = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            post.name = name;
+            post.transform.SetParent(parent);
+            // Unity's cylinder is 2 units tall, so the y scale is HALF the height.
+            post.transform.localScale = new Vector3(radius * 2f, height / 2f, radius * 2f);
+            post.transform.position = at + Vector3.up * (height / 2f);
+            Object.Destroy(post.GetComponent<Collider>());
+            Paint(post, color);
         }
 
         private static void Marking(Transform parent, string name, Vector3 centre,

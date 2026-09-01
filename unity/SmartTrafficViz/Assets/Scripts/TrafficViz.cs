@@ -61,7 +61,7 @@ namespace SmartTraffic
         private float _interval;        // measured seconds between the last two frames
         private SimFrame _latest;
         private Material[] _paints;
-        private Material _glass;
+        private Material _glass, _tyre, _trim, _headlight, _tail;
         private int _spawned;
         private GameObject _sceneRoot;
         private CameraRig _rig;
@@ -93,6 +93,13 @@ namespace SmartTraffic
                     _paints[i] = new Material(shader) { color = palette[i] };
                 }
                 _glass = new Material(shader) { color = new Color(0.10f, 0.14f, 0.18f) };
+                _tyre = new Material(shader) { color = new Color(0.07f, 0.07f, 0.08f) };
+                _trim = new Material(shader) { color = new Color(0.13f, 0.13f, 0.15f) };
+                // Lamps are emissive for the same reason the signal aspects are: at this camera
+                // range an unlit dark-red face is indistinguishable from bodywork, and which end
+                // of a car is which is exactly what the viewer is trying to read.
+                _headlight = Emissive(shader, new Color(1.00f, 0.96f, 0.82f), 1.6f);
+                _tail = Emissive(shader, new Color(0.85f, 0.12f, 0.10f), 1.9f);
             }
 
             EnsureCamera();
@@ -240,16 +247,41 @@ namespace SmartTraffic
                 return reused;
             }
 
-            // A body plus a smaller cabin reads as a car at this camera range, where a single box
-            // reads as a brick. The root carries no mesh so position/rotation stay on one
-            // transform and the parts never need touching again.
+            // A body, a cabin, glass, four wheels and lamps at both ends. The three-box version
+            // read as a bar of soap: with no wheels a vehicle appears to hover, and hovering is
+            // the single thing that most makes a traffic scene look like a toy. The wheels also
+            // give the eye something at ground level to judge contact and scale against.
+            //
+            // Still boxes and cylinders, still no imported meshes - the parts are just placed
+            // where a car has them. All of it is built once per pooled vehicle and never touched
+            // again; the root carries no mesh so position/rotation stay on one transform.
             var car = new GameObject("Vehicle");
             car.transform.SetParent(_carRoot);
 
             var paint = _paints[_spawned++ % _paints.Length];
-            AddPart(car.transform, "Body", new Vector3(1.8f, 0.85f, 4.3f), new Vector3(0f, 0f, 0f), paint);
-            AddPart(car.transform, "Cabin", new Vector3(1.55f, 0.7f, 2.0f), new Vector3(0f, 0.72f, -0.25f), paint);
-            AddPart(car.transform, "Glass", new Vector3(1.58f, 0.42f, 0.12f), new Vector3(0f, 0.78f, 0.76f), _glass);
+            var t = car.transform;
+
+            // +z is forward (see the yaw applied in Apply), so the cabin sits behind centre and
+            // the windscreen faces +z.
+            AddPart(t, "Body", new Vector3(1.8f, 0.62f, 4.3f), new Vector3(0f, 0.05f, 0f), paint);
+            AddPart(t, "Skirt", new Vector3(1.66f, 0.30f, 4.0f), new Vector3(0f, -0.26f, 0f), _trim);
+            AddPart(t, "Cabin", new Vector3(1.58f, 0.62f, 2.1f), new Vector3(0f, 0.62f, -0.30f), paint);
+            AddPart(t, "Windscreen", new Vector3(1.50f, 0.50f, 0.14f), new Vector3(0f, 0.62f, 0.74f), _glass);
+            AddPart(t, "Rear glass", new Vector3(1.50f, 0.44f, 0.14f), new Vector3(0f, 0.62f, -1.34f), _glass);
+            AddPart(t, "Side glass L", new Vector3(0.10f, 0.44f, 1.7f), new Vector3(-0.79f, 0.64f, -0.30f), _glass);
+            AddPart(t, "Side glass R", new Vector3(0.10f, 0.44f, 1.7f), new Vector3(0.79f, 0.64f, -0.30f), _glass);
+
+            // Lamps: warm at the front, red at the back. Two small faces are enough to tell which
+            // way a car is pointing from the overhead camera, which the plain boxes could not.
+            AddPart(t, "Headlight L", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(-0.62f, 0.10f, 2.16f), _headlight);
+            AddPart(t, "Headlight R", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(0.62f, 0.10f, 2.16f), _headlight);
+            AddPart(t, "Tail L", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(-0.63f, 0.14f, -2.16f), _tail);
+            AddPart(t, "Tail R", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(0.63f, 0.14f, -2.16f), _tail);
+
+            AddWheel(t, "Wheel FL", new Vector3(-0.86f, -0.30f, 1.32f));
+            AddWheel(t, "Wheel FR", new Vector3(0.86f, -0.30f, 1.32f));
+            AddWheel(t, "Wheel RL", new Vector3(-0.86f, -0.30f, -1.32f));
+            AddWheel(t, "Wheel RR", new Vector3(0.86f, -0.30f, -1.32f));
             return car;
         }
 
@@ -262,6 +294,28 @@ namespace SmartTraffic
             part.transform.localPosition = offset;
             Destroy(part.GetComponent<BoxCollider>()); // nothing here is physical
             part.GetComponent<Renderer>().sharedMaterial = mat;
+        }
+
+        private static Material Emissive(Shader shader, Color c, float strength)
+        {
+            var m = new Material(shader) { color = c };
+            m.EnableKeyword("_EMISSION");
+            m.SetColor("_EmissionColor", c * strength);
+            return m;
+        }
+
+        /// <summary>A cylinder laid on its side, so its round face points out across the car.</summary>
+        private void AddWheel(Transform parent, string name, Vector3 offset)
+        {
+            var wheel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            wheel.name = name;
+            wheel.transform.SetParent(parent);
+            // Unity's cylinder is 2 units tall along +y, so y-scale is the HALF width.
+            wheel.transform.localScale = new Vector3(0.62f, 0.12f, 0.62f);
+            wheel.transform.localPosition = offset;
+            wheel.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+            Destroy(wheel.GetComponent<CapsuleCollider>());
+            wheel.GetComponent<Renderer>().sharedMaterial = _tyre;
         }
 
         private void Release(GameObject car)

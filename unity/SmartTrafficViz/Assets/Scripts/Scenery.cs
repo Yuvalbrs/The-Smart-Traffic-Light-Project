@@ -31,6 +31,9 @@ namespace SmartTraffic
         };
         private static readonly Color SnowColor = new Color(0.92f, 0.94f, 0.97f);
         private static readonly Color CloudColor = new Color(0.96f, 0.97f, 1.00f);
+        //: The underside of a cumulus is never white. Two flat shades fake self-shadowing
+        //: cheaply; a real gradient would need a shader this build deliberately does not have.
+        private static readonly Color CloudShadow = new Color(0.78f, 0.81f, 0.88f);
 
         private static Mesh _cone;
 
@@ -112,55 +115,208 @@ namespace SmartTraffic
             }
         }
 
+        /// <summary>
+        /// Ridged mountains, each its own generated mesh rather than a scaled cone.
+        ///
+        /// A cone is rotationally symmetric, so a ring of them reads as a row of identical party
+        /// hats however the colours are varied - which is exactly what made the old horizon look
+        /// like a diagram. Displacing each ring of vertices by its own radial noise breaks that
+        /// symmetry: every mountain gets spurs and gullies, no two silhouettes repeat, and the
+        /// profile is concave near the base (mountains flare out at the bottom) instead of
+        /// straight-sided.
+        ///
+        /// The snow cap is a second mesh built from the SAME ridge profile, covering only the
+        /// rings above the snowline and inflated by a hair to sit on the rock. So it follows the
+        /// spurs and gullies down instead of being a smooth white cone balanced on the summit.
+        /// Two meshes rather than one with per-vertex colour, because the pinned shader is
+        /// Standard and Standard ignores <c>mesh.colors</c> entirely - vertex colours would have
+        /// compiled, run, and rendered a uniformly white mountain range.
+        /// </summary>
         private static void BuildHills(Transform root, System.Random rng)
         {
             var hills = new GameObject("Hills").transform;
             hills.SetParent(root);
 
-            for (var i = 0; i < 22; i++)
+            // Two staggered rings: a far wall and a nearer, lower one. A single ring at one radius
+            // gives every peak the same apparent size, which flattens the horizon.
+            BuildRidgeRing(hills, rng, count: 26, minDist: 520f, spread: 240f,
+                minHeight: 150f, heightSpread: 190f, snowChance: 0.75f);
+            BuildRidgeRing(hills, rng, count: 18, minDist: 380f, spread: 120f,
+                minHeight: 70f, heightSpread: 80f, snowChance: 0.12f);
+        }
+
+        private static void BuildRidgeRing(Transform hills, System.Random rng, int count,
+            float minDist, float spread, float minHeight, float heightSpread, float snowChance)
+        {
+            for (var i = 0; i < count; i++)
             {
-                // Ring them well beyond the network so they read as distance, not obstacles.
-                var angle = (float)(rng.NextDouble() * Mathf.PI * 2);
-                var dist = 420f + (float)rng.NextDouble() * 260f;
-                var at = new Vector3(Mathf.Cos(angle) * dist, -8f, Mathf.Sin(angle) * dist);
+                // Even angular spacing plus jitter: pure random angles clump and leave gaps, and a
+                // gap on the horizon looks like a missing object rather than a valley.
+                var angle = (i / (float)count) * Mathf.PI * 2f
+                            + (float)(rng.NextDouble() - 0.5) * (Mathf.PI * 2f / count) * 0.8f;
+                var dist = minDist + (float)rng.NextDouble() * spread;
+                var at = new Vector3(Mathf.Cos(angle) * dist, -10f, Mathf.Sin(angle) * dist);
 
-                var height = 90f + (float)rng.NextDouble() * 150f;
-                var radius = height * (0.8f + (float)rng.NextDouble() * 0.5f);
-                Cone(hills, "Hill", at, radius, height, HillColor[rng.Next(HillColor.Length)]);
+                var height = minHeight + (float)rng.NextDouble() * heightSpread;
+                var radius = height * (0.75f + (float)rng.NextDouble() * 0.45f);
+                var yaw = (float)rng.NextDouble() * 360f;
 
-                if (height > 170f) // snow cap on the tall ones only
+                // One ridge profile drives both meshes, so the snow cannot drift off the rock.
+                const int sides = 14;
+                var ridge = new float[sides];
+                for (var s = 0; s < sides; s++) ridge[s] = 0.72f + (float)rng.NextDouble() * 0.56f;
+
+                Place(hills, "Mountain", at, yaw, radius, height,
+                    RidgeMesh(ridge, sides, 0f, 1f, 1f, rng),
+                    HillColor[rng.Next(HillColor.Length)]);
+
+                if (rng.NextDouble() < snowChance)
                 {
-                    Cone(hills, "Snow", at + Vector3.up * (height * 0.72f),
-                        radius * 0.29f, height * 0.28f, SnowColor);
+                    var snowline = 0.58f + (float)rng.NextDouble() * 0.16f;
+                    Place(hills, "Snow", at, yaw, radius, height,
+                        // 1.5% outward keeps it clear of the rock it sits on; any less and the
+                        // two surfaces z-fight into a shimmering mess at this camera distance.
+                        RidgeMesh(ridge, sides, snowline, 1f, 1.015f, rng),
+                        SnowColor);
                 }
             }
         }
 
+        private static void Place(Transform parent, string name, Vector3 at, float yaw,
+            float radius, float height, Mesh mesh, Color color)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent);
+            go.transform.position = at;
+            go.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            go.transform.localScale = new Vector3(radius, height, radius);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>();
+            IntersectionScene.Paint(go, color);
+        }
+
+        /// <summary>
+        /// A slice of one mountain: unit radius, unit height, apex at +y.
+        ///
+        /// Stacked rings between <paramref name="vFrom"/> and <paramref name="vTo"/> (0 = base,
+        /// 1 = summit). Each ring's radius follows a concave profile, and each vertex is pushed
+        /// in or out by <paramref name="ridge"/>[direction] - one value per compass direction,
+        /// reused by every ring. That vertical coherence is the whole trick: noise that varies
+        /// per ring gives dents, noise held constant down the mountain gives spurs and gullies.
+        ///
+        /// <paramref name="inflate"/> scales the whole slice outward, used to lift the snow cap
+        /// clear of the rock it shares a surface with.
+        /// </summary>
+        private static Mesh RidgeMesh(float[] ridge, int sides, float vFrom, float vTo,
+            float inflate, System.Random rng)
+        {
+            const int rings = 7;
+
+            var verts = new Vector3[rings * sides + 1];
+            var n = 0;
+            for (var r = 0; r < rings; r++)
+            {
+                var v = Mathf.Lerp(vFrom, vTo, r / (float)rings);
+                // Concave profile: a wide skirt and steep shoulders, rather than a cone's
+                // dead-straight sides.
+                var ringR = Mathf.Pow(1f - v, 1.45f);
+                for (var s = 0; s < sides; s++)
+                {
+                    var a = s / (float)sides * Mathf.PI * 2f;
+                    // Ridges fade towards the summit, so the peak stays a peak.
+                    var amp = Mathf.Lerp(ridge[s], 1f, v * 0.65f);
+                    var rr = ringR * amp * inflate;
+                    var yj = v + (float)(rng.NextDouble() - 0.5) * 0.02f;
+                    verts[n++] = new Vector3(Mathf.Cos(a) * rr, yj, Mathf.Sin(a) * rr);
+                }
+            }
+
+            var apex = verts.Length - 1;
+            verts[apex] = new Vector3(0f, vTo, 0f);
+
+            var tris = new System.Collections.Generic.List<int>((rings * sides + sides) * 6);
+            for (var r = 0; r < rings - 1; r++)
+            {
+                for (var s = 0; s < sides; s++)
+                {
+                    var a0 = r * sides + s;
+                    var a1 = r * sides + (s + 1) % sides;
+                    var b0 = (r + 1) * sides + s;
+                    var b1 = (r + 1) * sides + (s + 1) % sides;
+                    tris.Add(a0); tris.Add(b0); tris.Add(a1);
+                    tris.Add(a1); tris.Add(b0); tris.Add(b1);
+                }
+            }
+            var top = (rings - 1) * sides;
+            for (var s = 0; s < sides; s++)
+            {
+                tris.Add(top + s); tris.Add(apex); tris.Add(top + (s + 1) % sides);
+            }
+
+            var mesh = new Mesh { name = "Ridge" };
+            mesh.vertices = verts;
+            mesh.triangles = tris.ToArray();
+            // Recalculated normals on a low ring count keep the faceted look the rest of the
+            // scene has, without authoring split vertices by hand.
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        /// <summary>
+        /// Cumulus, built as clusters of ellipsoids with a flat base.
+        ///
+        /// The old version scattered a handful of equal spheres around a point, which reads as a
+        /// bunch of grapes: real cumulus sit ON a level, because that level is where the air
+        /// reaches its condensation temperature. So every puff in a cloud shares one base height
+        /// and only grows upward, the puffs get smaller the higher they sit, and the whole cluster
+        /// is stretched along one axis instead of being spherical in plan.
+        ///
+        /// Two shades: the lower puffs are slightly grey, the upper ones near-white, which fakes
+        /// the self-shadowing that makes a cloud look like it has volume.
+        /// </summary>
         private static void BuildClouds(Transform root, System.Random rng)
         {
             var clouds = new GameObject("Clouds").transform;
             clouds.SetParent(root);
 
-            for (var i = 0; i < 26; i++)
+            for (var i = 0; i < 22; i++)
             {
+                var baseY = 160f + (float)rng.NextDouble() * 80f;
                 var centre = new Vector3(
-                    (float)(rng.NextDouble() * 2 - 1) * 500f,
-                    150f + (float)rng.NextDouble() * 90f,
-                    (float)(rng.NextDouble() * 2 - 1) * 500f);
+                    (float)(rng.NextDouble() * 2 - 1) * 520f,
+                    baseY,
+                    (float)(rng.NextDouble() * 2 - 1) * 520f);
 
-                var puffs = 3 + rng.Next(3);
+                // One horizontal direction the cluster elongates along - clouds are drawn out by
+                // wind, not round.
+                var drift = (float)(rng.NextDouble() * Mathf.PI * 2);
+                var along = new Vector3(Mathf.Cos(drift), 0f, Mathf.Sin(drift));
+                var across = new Vector3(-along.z, 0f, along.x);
+                var spread = 30f + (float)rng.NextDouble() * 34f;
+                var scale = 0.8f + (float)rng.NextDouble() * 0.7f;
+
+                var puffs = 6 + rng.Next(5);
                 for (var p = 0; p < puffs; p++)
                 {
+                    // Bias along the drift axis; a little across; upward only.
+                    var u = (float)(rng.NextDouble() * 2 - 1);
+                    var lift = (1f - Mathf.Abs(u)) * (float)rng.NextDouble();   // fattest in the middle
+                    var at = centre
+                             + along * (u * spread)
+                             + across * ((float)(rng.NextDouble() * 2 - 1) * spread * 0.34f)
+                             + Vector3.up * (lift * 15f * scale);
+
+                    var size = (16f + (float)rng.NextDouble() * 16f) * scale
+                               * Mathf.Lerp(1f, 0.62f, lift);   // smaller the higher it sits
                     var puff = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                    puff.name = "Cloud";
+                    puff.name = "Puff";
                     puff.transform.SetParent(clouds);
-                    var size = 22f + (float)rng.NextDouble() * 26f;
-                    puff.transform.localScale = new Vector3(size, size * 0.55f, size * 0.8f);
-                    puff.transform.position = centre + new Vector3(
-                        (float)(rng.NextDouble() * 2 - 1) * 26f, (float)rng.NextDouble() * 6f,
-                        (float)(rng.NextDouble() * 2 - 1) * 16f);
+                    puff.transform.localScale = new Vector3(size, size * 0.62f, size * 0.86f);
+                    puff.transform.position = at;
+                    puff.transform.rotation = Quaternion.Euler(0f, drift * Mathf.Rad2Deg, 0f);
                     Object.Destroy(puff.GetComponent<Collider>());
-                    IntersectionScene.Paint(puff, CloudColor);
+                    IntersectionScene.Paint(puff, lift > 0.45f ? CloudColor : CloudShadow);
                 }
             }
         }

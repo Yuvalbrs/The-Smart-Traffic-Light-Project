@@ -153,6 +153,7 @@ namespace SmartTraffic
 
         private void DrawMenu()
         {
+            MenuBackdrop.Draw();
             const float w = 420f, rowH = 44f, gap = 10f;
             var h = 374f;   // one row taller since the dashboard entry joined the menu
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
@@ -200,13 +201,14 @@ namespace SmartTraffic
         private void DrawDashboard()
         {
             _dash?.Draw();
-            if (GUI.Button(new Rect(20f, UnityEngine.Screen.height - 44f, 150f, 30f),
-                    "Back  Esc", UITheme.Button))
+            // Sized to match the live bar's buttons - the two screens are toggled back and forth
+            // during a demo and controls that change size between them read as a different app.
+            var y = UnityEngine.Screen.height - 48f;
+            if (GUI.Button(new Rect(20f, y, 150f, 34f), "Back  Esc", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
-            if (GUI.Button(new Rect(180f, UnityEngine.Screen.height - 44f, 170f, 30f),
-                    "3-D view  D", UITheme.Button))
+            if (GUI.Button(new Rect(178f, y, 168f, 34f), "3-D view  D", UITheme.Button))
             {
                 Go(Screen.Live);
             }
@@ -214,6 +216,9 @@ namespace SmartTraffic
 
         private void DrawControls()
         {
+            // Controls and About are full screens over an empty scene, same as the menu - without
+            // the backdrop they sit on a flat void.
+            MenuBackdrop.Draw();
             var w = RunSetupUI.PanelWidth;
             var h = RunSetupUI.PanelHeight;
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
@@ -229,6 +234,7 @@ namespace SmartTraffic
 
         private void DrawAbout()
         {
+            MenuBackdrop.Draw();
             var box = Sheet(560f, 300f, "About");
             var y = box.y + 74f;
             GUI.Label(new Rect(box.x + 24f, y, box.width - 48f, 170f),
@@ -244,25 +250,40 @@ namespace SmartTraffic
         }
 
         /// <summary>Height of the live-view top bar. TrafficViz lays its HUD out below this.</summary>
-        public const float TopBarHeight = 34f;
+        public const float TopBarHeight = 46f;
 
         /// <summary>The thin bar shown while the live view is up.</summary>
         private void DrawLiveBar()
         {
             var w = UnityEngine.Screen.width;
             UITheme.Backdrop(new Rect(0f, 0f, w, TopBarHeight));
-            GUI.Label(new Rect(14f, 7f, 460f, 20f),
+            GUI.Label(new Rect(16f, 12f, 460f, 22f),
                 "SMART TRAFFIC   -   " + _cfg.Scenario + "  /  " + _cfg.Controller, UITheme.Heading);
 
-            if (GUI.Button(new Rect(w - 250f, 4f, 128f, 26f),
+            // The 3-D view had no way out to the numbers except the D key, which nobody discovers
+            // during a demo. Three buttons, laid out from the right edge so they cannot overlap
+            // the title on a narrow window.
+            const float bh = 34f, by = 6f, gap = 8f;
+            var x = w - 12f;
+
+            x -= 118f;
+            if (GUI.Button(new Rect(x, by, 118f, bh), "Menu  Esc", UITheme.Button))
+            {
+                Go(Screen.Menu);
+            }
+
+            x -= 150f + gap;
+            if (GUI.Button(new Rect(x, by, 150f, bh), "Dashboard  D", UITheme.Button))
+            {
+                Go(Screen.Dashboard);
+            }
+
+            x -= 168f + gap;
+            if (GUI.Button(new Rect(x, by, 168f, bh),
                     _overlay ? "Close  Tab" : "Change scene  Tab",
                     _overlay ? UITheme.ButtonOn : UITheme.Button))
             {
                 _overlay = !_overlay;
-            }
-            if (GUI.Button(new Rect(w - 116f, 4f, 104f, 26f), "Menu  Esc", UITheme.Button))
-            {
-                Go(Screen.Menu);
             }
 
             if (!_overlay) return;

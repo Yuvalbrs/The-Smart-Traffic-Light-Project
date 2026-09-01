@@ -41,10 +41,13 @@ namespace SmartTraffic
 
             _button = new GUIStyle(GUI.skin.button)
             {
-                fontSize = 13,
+                // 14/12,12 rather than 13/7,7: the live-view controls are read at a glance from
+                // across a room during a demo, and taller buttons with the old padding looked
+                // like text floating in a box.
+                fontSize = 14,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                padding = new RectOffset(10, 10, 7, 7),
+                padding = new RectOffset(12, 12, 8, 8),
                 border = new RectOffset(2, 2, 2, 2),
             };
             _button.normal.background = _buttonTex;
