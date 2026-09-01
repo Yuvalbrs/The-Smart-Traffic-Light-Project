@@ -88,7 +88,7 @@ def test_health_reports_channels_and_backpressure_settings(client) -> None:
     assert body["session"] is None
     # Exact set, not a superset: a channel silently disappearing from /health is how a dead
     # feed goes unnoticed. "training" joined dash/unity when in-app training landed.
-    assert set(body["channels"]) == {"dash", "unity", "training"}
+    assert set(body["channels"]) == {"dash", "unity", "training", "evaluation"}
     for channel in body["channels"].values():
         assert channel["queue_maxsize"] == 8
         assert channel["dropped"] == 0

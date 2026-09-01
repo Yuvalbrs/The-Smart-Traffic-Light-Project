@@ -318,3 +318,89 @@
   letter-spacing: 0.02em;
   opacity: 0.75;
 }
+
+/* Comparison: "yours" chip on user-trained rows + the pre-registered ablation caption. */
+.yours-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
+.ablation-caption {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* TrainingPanel: the "Trained models" list + inline evaluate form (see TrainingPanel.tsx). */
+.models-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.models-section h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.models-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 8px 4px 0;
+}
+
+.models-table td {
+  padding: 6px 8px 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.source-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.source-badge.source-user {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.source-badge.source-matrix {
+  color: var(--text-muted);
+}
+
+.eval-form-row td {
+  border-top: none;
+  padding-top: 0;
+}
+
+.inline-eval-form {
+  flex-direction: row;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 0 10px;
+}
+
+.evaluation-status {
+  margin-top: 16px;
+}

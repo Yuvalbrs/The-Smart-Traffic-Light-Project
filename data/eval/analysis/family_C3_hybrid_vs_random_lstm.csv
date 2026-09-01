@@ -1,8 +1,8 @@
-kpi,kpi_col,direction,headline,comparison,n,dropped,median_diff,ci_lo,ci_hi,p_raw,p_holm,stars,significant,family_size
-avg_wait,avg_waiting_time,lower,True,DQN-random-lstm,6,9,0.5164637641482801,-5.382371343448072,11.508826447703727,0.5625,1.0,  ,False,7
-avg_queue,avg_queue_length,lower,False,DQN-random-lstm,6,9,-156.84671311723721,-178.21281429869737,-123.30233262647683,0.03125,0.21875,  ,False,7
-throughput,throughput,higher,True,DQN-random-lstm,6,9,1043.0,736.5,1318.5,0.03125,0.21875,  ,False,7
-num_stops,num_stops,lower,False,DQN-random-lstm,6,9,-0.3801523487187501,-0.46807999548397977,0.042457126911738224,0.15625,0.625,  ,False,7
-fairness_std(5a),fairness_std,lower,False,DQN-random-lstm,6,9,6.26945112027631,-13.78569837022621,46.903165066292836,0.5625,1.0,  ,False,7
-worst_max(5b),worst_movement_max_wait,lower,True,DQN-random-lstm,6,9,233.0,-6.5,587.0,0.09375,0.46875,  ,False,7
-wait_p95,wait_p95,lower,False,DQN-random-lstm,6,9,8.650000000000034,-32.200000000000045,131.72499999999997,0.6875,1.0,  ,False,7
+kpi,kpi_col,direction,headline,comparison,n,dropped,sd_train_seed,censored_a,censored_b,imputed,median_diff,ci_lo,ci_hi,effect_source,p_raw,undecidable,n_eff,n_observed,fully_imputed,n_cc,dropped_cc,p_raw_cc,p_holm,p_holm_cc,stars,significant,significant_cc,agrees,family_size,family_size_used,min_testable_n,family_testable
+avg_wait,avg_waiting_time,lower,True,DQN-random-lstm,15,0,0.7971766999616356,0,0,0,0.9426172148355505,0.8452380952380913,1.3241188666205943,primary,6.103515625e-05,False,15,15,False,15,0,6.103515625e-05,0.00042724609375,0.00042724609375,**,True,True,True,7,7,9,7
+avg_queue,avg_queue_length,lower,False,DQN-random-lstm,15,0,0.33949011438291177,0,0,0,0.4188629708169209,0.3258608502474001,0.6270827022114505,primary,6.103515625e-05,False,15,15,False,15,0,6.103515625e-05,0.00042724609375,0.00042724609375,**,True,True,True,7,7,9,7
+throughput,throughput,higher,True,DQN-random-lstm,15,0,3.1492387844007528,0,0,0,0.33333333333325754,-0.6833333333334044,1.333333333333485,primary,0.7115523195425639,False,14,15,False,15,0,0.7115523195425639,1.0,1.0,  ,False,False,True,7,7,9,7
+num_stops,num_stops,lower,False,DQN-random-lstm,15,0,0.013295547879967685,0,0,0,0.005952380952380931,-0.00023809523809537048,0.019648160840758377,primary,0.01025390625,False,15,15,False,15,0,0.01025390625,0.041015625,0.041015625,* ,True,True,True,7,7,9,7
+fairness_std(5a),fairness_std,lower,False,DQN-random-lstm,15,0,1.0403321041049571,0,0,0,-0.018541127008553815,-0.29472024178483913,0.34449929616436314,primary,0.93408203125,False,15,15,False,15,0,0.93408203125,1.0,1.0,  ,False,False,True,7,7,9,7
+worst_max(5b),worst_movement_max_wait,lower,True,DQN-random-lstm,15,0,2.651219292168963,0,0,0,2.3333333333333286,0.0,3.6666666666666714,primary,0.024548067393270374,False,14,15,False,15,0,0.024548067393270374,0.07364420217981113,0.07364420217981113,  ,False,False,True,7,7,9,7
+wait_p95,wait_p95,lower,False,DQN-random-lstm,15,0,2.7518497074601447,0,0,0,3.8000000000000327,1.6333333333332902,4.216666666666626,primary,0.0006533107814151377,False,15,15,False,15,0,0.0006533107814151377,0.0032665539070756886,0.0032665539070756886,**,True,True,True,7,7,9,7

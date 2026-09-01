@@ -58,6 +58,12 @@ CONTROLLER_META: dict[str, dict[str, Any]] = {
     "actuated": {"label": "SUMO actuated", "is_ours": False},
 }
 
+#: The variants the current campaign is defined over. `runs/` also holds a dozen directories from
+#: abandoned lines of work (iqn-*, *-bc, *-boot). They are still listable and still evaluatable -
+#: hiding them would misrepresent what was tried - but they must not sit between the user and the
+#: models the comparison is actually about.
+CAMPAIGN_VARIANTS = ("plain", "hybrid", "random-lstm")
+
 _VARIANT_LABEL = {
     "plain": "DQN, no forecast",
     "hybrid": "DQN + forecast",
@@ -106,6 +112,7 @@ def _describe_run_dir(path: Path) -> dict[str, Any] | None:
         "label": label,
         # A run started from the app is named ui_*; anything else came from the training matrix.
         "source": "user" if path.name.startswith("ui_") else "matrix",
+        "is_campaign_variant": variant in CAMPAIGN_VARIANTS,
         # Relative when it can be (short and portable in the UI), absolute otherwise: a runs
         # directory pointed outside the repo must not raise and take the whole listing with it.
         "checkpoint": str(
@@ -130,7 +137,14 @@ def list_models() -> dict[str, Any]:
         entry = _describe_run_dir(path)
         if entry is not None:
             models.append(entry)
-    models.sort(key=lambda m: (m["source"] != "user", m["id"]))
+    # Ordered by relevance to the task at hand, not alphabetically: what you just trained, then
+    # the campaign's own arms, then everything that finished, then partial runs.
+    models.sort(key=lambda m: (
+        m["source"] != "user",
+        not m["is_campaign_variant"],
+        not m["has_final"],
+        m["id"],
+    ))
     return {
         "models": models,
         "note": (
@@ -159,16 +173,24 @@ _COMPARISON_SQL = text(
       JOIN episode_kpi   k ON k.episode_id_fk = e.id
      WHERE e.scenario = :scenario
        AND r.mode     = :mode
-       AND r.git_sha  = :git_sha
+       AND (r.git_sha = :git_sha OR r.controller LIKE 'ui:%')
      GROUP BY r.controller
     """
 )
+
+#: What makes a run set a CAMPAIGN rather than an ad-hoc evaluation: it contains the ablation arms.
+#: Recency alone is not enough - evaluating one user model also writes baseline rows for pairing,
+#: so a two-seed click from the UI is the newest git_sha in the database and would otherwise be
+#: selected as "the campaign", replacing a 900-episode result with eight episodes.
+_CAMPAIGN_CONTROLLERS = ("plain", "hybrid", "random-lstm")
 
 _LATEST_SHA_SQL = text(
     """
     SELECT r.git_sha
       FROM experiment_run r
-     WHERE r.mode = :mode AND r.git_sha IS NOT NULL
+     WHERE r.mode = :mode
+       AND r.git_sha IS NOT NULL
+       AND r.controller IN ('plain', 'hybrid', 'random-lstm')
      GROUP BY r.git_sha
      ORDER BY MAX(r.created_at) DESC
      LIMIT 1
@@ -180,7 +202,9 @@ _ALL_SHAS_SQL = text(
     SELECT r.git_sha AS git_sha, COUNT(e.id) AS episodes, MAX(r.created_at) AS newest
       FROM experiment_run r
       JOIN episode e ON e.run_id_fk = r.id
-     WHERE r.mode = :mode AND r.git_sha IS NOT NULL
+     WHERE r.mode = :mode
+       AND r.git_sha IS NOT NULL
+       AND r.controller IN ('plain', 'hybrid', 'random-lstm')
      GROUP BY r.git_sha
      ORDER BY MAX(r.created_at) DESC
     """
@@ -237,12 +261,24 @@ def comparison(
         )
 
     rows = []
+    user_shas: set[str] = set()
     for rec in records:
-        meta = CONTROLLER_META.get(rec["controller"], {"label": rec["controller"], "is_ours": False})
+        # A ``ui:`` controller is a model the user trained and evaluated from the application. It
+        # is shown BESIDE the campaign so "train a model, then compare it" works at all, but it is
+        # never one of the campaign's arms: different episode budget, different day, and whatever
+        # code was current. Marking it is what stops it being read as a pre-registered result.
+        is_user_model = str(rec["controller"]).startswith("ui:")
+        if is_user_model and rec["git_sha"]:
+            user_shas.add(str(rec["git_sha"]))
+        meta = CONTROLLER_META.get(
+            rec["controller"],
+            {"label": str(rec["controller"]).removeprefix("ui:"), "is_ours": False},
+        )
         row: dict[str, Any] = {
             "controller": rec["controller"],
             "label": meta["label"],
             "is_ours": meta["is_ours"],
+            "is_user_model": is_user_model,
             "n_episodes": int(rec["n_episodes"]),
             "gridlock_rate": _round(rec["gridlock_rate"], 3),
         }
@@ -260,6 +296,7 @@ def comparison(
         "kpis": [dict(spec) for spec in KPI_SPEC],
         "provenance": {
             "git_sha": selected,
+            "user_model_shas": sorted(user_shas),
             "newest_run_at": str(newest) if newest else None,
             "source": "data/traffic.db",
             # Every campaign in the database, newest first, so the client can offer a switch and a
@@ -270,7 +307,9 @@ def comparison(
             ],
         },
         "note": (
-            f"Campaign {selected} only - results from other campaigns are never averaged in. "
+            f"Campaign {selected}; other campaigns are never averaged in. Rows marked as user "
+            f"models were trained and evaluated from this application, on different code, and are "
+            f"shown for comparison only. "
             "Episodes are paired by seed "
             "across controllers. A high gridlock rate means the controller could not clear the "
             "demand, so its wait and throughput are not directly comparable to an uncensored "

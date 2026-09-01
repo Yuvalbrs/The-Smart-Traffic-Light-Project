@@ -1,10 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ApiError, WS_BASE, getCurrentTraining, startTraining, stopTraining } from "../lib/api";
-import type { TrainingFrameMessage, TrainingStatus, TrainingVariant } from "../lib/api";
+import {
+  ApiError,
+  WS_BASE,
+  getCurrentEvaluation,
+  getCurrentTraining,
+  getModels,
+  startEvaluation,
+  startTraining,
+  stopEvaluation,
+  stopTraining,
+} from "../lib/api";
+import type {
+  EvaluationFrameMessage,
+  EvaluationStatus,
+  ModelInfo,
+  TrainingFrameMessage,
+  TrainingStatus,
+  TrainingVariant,
+} from "../lib/api";
 
 const POLL_MS = 2000;
 const MAX_EPISODES = 300;
+const EVAL_SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
+const MAX_EVAL_SEEDS = 15;
 
 type SocketState = "connecting" | "open" | "closed";
 
@@ -34,6 +53,21 @@ export function TrainingPanel() {
   // Mutated only from effect/socket callbacks (never during render) so the poll fallback below
   // can check "is the socket open right now" without forcing a re-render on every ws state flip.
   const wsStateRef = useRef<SocketState>("connecting");
+
+  // --- trained models list (GET /models) --------------------------------
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  // --- evaluation (POST/DELETE /evaluation) ------------------------------
+  const [evalOpenFor, setEvalOpenFor] = useState<string | null>(null);
+  const [evalScenario, setEvalScenario] = useState("SCN-05");
+  const [evalSeeds, setEvalSeeds] = useState(5);
+  const [evalStatus, setEvalStatus] = useState<EvaluationStatus | null>(null);
+  const [evalBusy, setEvalBusy] = useState(false);
+  const [evalError, setEvalError] = useState<string | null>(null);
+  const [evalStopping, setEvalStopping] = useState(false);
+  const evalWsStateRef = useRef<SocketState>("connecting");
 
   // Load whatever training job already exists (if any) and keep a live socket open for updates.
   useEffect(() => {
@@ -94,7 +128,96 @@ export function TrainingPanel() {
     return () => clearInterval(id);
   }, []);
 
+  const fetchModels = () => {
+    setModelsLoading(true);
+    setModelsError(null);
+    getModels()
+      .then((res) => setModels(res.models))
+      .catch((e) => setModelsError(e instanceof ApiError ? e.detail : String(e)))
+      .finally(() => setModelsLoading(false));
+  };
+
+  // Load the model list once on mount.
+  useEffect(() => {
+    fetchModels();
+  }, []);
+
+  // A finished training job produces a new checkpoint that only shows up in GET /models once it
+  // lands - re-list so the row (and its Evaluate button) appears without a manual refresh.
+  useEffect(() => {
+    if (status?.status === "done") fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.status, status?.job_id]);
+
+  // Load whatever evaluation job already exists and keep a live socket open for updates - same
+  // shape as the training socket above, just pointed at /ws/evaluation.
+  useEffect(() => {
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    getCurrentEvaluation()
+      .then((s) => {
+        if (!cancelled) setEvalStatus(s);
+      })
+      .catch(() => {
+        // 404: no evaluation has ever started - status stays null.
+      });
+
+    const connect = () => {
+      if (cancelled) return;
+      evalWsStateRef.current = "connecting";
+      socket = new WebSocket(WS_BASE + "/ws/evaluation");
+
+      socket.onopen = () => {
+        evalWsStateRef.current = "open";
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data) as EvaluationFrameMessage;
+        if (msg.type !== "evaluation_frame") return;
+        if (!cancelled) setEvalStatus(msg);
+      };
+
+      socket.onclose = () => {
+        if (cancelled) return;
+        evalWsStateRef.current = "closed";
+        retryTimer = setTimeout(connect, 1500);
+      };
+
+      socket.onerror = () => socket?.close();
+    };
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      socket?.close();
+    };
+  }, []);
+
+  // Fallback poll whenever the evaluation socket isn't open right now.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (evalWsStateRef.current === "open") return;
+      getCurrentEvaluation()
+        .then((s) => setEvalStatus(s))
+        .catch(() => {
+          // nothing running yet, or a transient error - keep the last known status displayed
+        });
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  // A finished evaluation is what the Compare tab reads - re-list models alongside it so
+  // has_final / labels stay current too.
+  useEffect(() => {
+    if (evalStatus?.status === "done") fetchModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evalStatus?.status, evalStatus?.job_id]);
+
   const running = status?.status === "running";
+  const evaluating = evalStatus?.status === "running";
 
   const handleStart = async () => {
     setBusy(true);
@@ -130,6 +253,45 @@ export function TrainingPanel() {
       setError(e instanceof ApiError ? e.detail : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleToggleEvalForm = (modelId: string) => {
+    setEvalError(null);
+    setEvalOpenFor((current) => (current === modelId ? null : modelId));
+    setEvalScenario("SCN-05");
+    setEvalSeeds(5);
+  };
+
+  const handleStartEvaluation = async (modelId: string) => {
+    setEvalBusy(true);
+    setEvalError(null);
+    setEvalStopping(false);
+    try {
+      const s = await startEvaluation({ model_id: modelId, scenario: evalScenario, seeds: evalSeeds });
+      setEvalStatus(s);
+      setEvalOpenFor(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setEvalError("an evaluation is already running - stop it first");
+      } else {
+        setEvalError(e instanceof ApiError ? e.detail : String(e));
+      }
+    } finally {
+      setEvalBusy(false);
+    }
+  };
+
+  const handleStopEvaluation = async () => {
+    setEvalBusy(true);
+    setEvalError(null);
+    try {
+      const result = await stopEvaluation();
+      setEvalStopping(result === "stopping");
+    } catch (e) {
+      setEvalError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setEvalBusy(false);
     }
   };
 
@@ -248,6 +410,136 @@ export function TrainingPanel() {
         </div>
       )}
       {!status && <p className="control-note">no training job started yet</p>}
+
+      <div className="models-section">
+        <h3>Trained models</h3>
+        {modelsLoading && <p className="control-note">loading…</p>}
+        {modelsError && <p className="error-text">{modelsError}</p>}
+        {!modelsLoading && !modelsError && models.length === 0 && (
+          <p className="control-note">no models trained yet</p>
+        )}
+
+        {models.length > 0 && (
+          <table className="models-table">
+            <thead>
+              <tr>
+                <th>model</th>
+                <th className="numeric-cell">episodes</th>
+                <th>source</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((m) => (
+                <Fragment key={m.id}>
+                  <tr>
+                    <td>{m.label}</td>
+                    <td className="numeric-cell">
+                      {m.episodes_trained}/{m.episodes}
+                    </td>
+                    <td>
+                      <span className={"source-badge source-" + m.source}>
+                        {m.source === "user" ? "yours" : "campaign"}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        onClick={() => handleToggleEvalForm(m.id)}
+                        disabled={!m.has_final || evaluating}
+                        title={
+                          !m.has_final
+                            ? "this run never reached its final episode - nothing to evaluate yet"
+                            : undefined
+                        }
+                      >
+                        evaluate
+                      </button>
+                    </td>
+                  </tr>
+                  {evalOpenFor === m.id && (
+                    <tr className="eval-form-row">
+                      <td colSpan={4}>
+                        <div className="control-form inline-eval-form">
+                          <label>
+                            scenario
+                            <select value={evalScenario} onChange={(e) => setEvalScenario(e.target.value)}>
+                              {EVAL_SCENARIOS.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            seeds
+                            <input
+                              type="number"
+                              min={1}
+                              max={MAX_EVAL_SEEDS}
+                              value={evalSeeds}
+                              onChange={(e) => setEvalSeeds(Number(e.target.value))}
+                            />
+                          </label>
+                          <div className="control-buttons">
+                            <button onClick={() => handleStartEvaluation(m.id)} disabled={evalBusy || evaluating}>
+                              run evaluation
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {evalError && <p className="error-text">{evalError}</p>}
+        {evalStopping && evaluating && <p className="control-note">stopping…</p>}
+
+        {evalStatus && (
+          <div className="evaluation-status">
+            <dl className="session-status">
+              <dt>job_id</dt>
+              <dd>{evalStatus.job_id}</dd>
+              <dt>status</dt>
+              <dd className={"state-" + evalStatus.status}>{evalStatus.status}</dd>
+              <dt>model</dt>
+              <dd>{evalStatus.label}</dd>
+              <dt>scenario / seeds</dt>
+              <dd>
+                {evalStatus.scenario} / {evalStatus.seeds}
+              </dd>
+              {evalStatus.error && (
+                <>
+                  <dt>error</dt>
+                  <dd className="error-text">{evalStatus.error}</dd>
+                </>
+              )}
+            </dl>
+
+            <div className="progress-row">
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${Math.min(evalStatus.pct, 100)}%` }} />
+              </div>
+              <span className="progress-label">
+                {evalStatus.episodes_done} / {evalStatus.episodes_total} episodes ({evalStatus.pct.toFixed(0)}%)
+              </span>
+            </div>
+
+            <div className="control-buttons">
+              <button onClick={handleStopEvaluation} disabled={evalBusy || !evaluating}>
+                stop
+              </button>
+            </div>
+
+            {evalStatus.status === "done" && (
+              <p className="control-note">Evaluated. Open the Compare tab to see it.</p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

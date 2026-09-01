@@ -107,6 +107,59 @@ def _load_agent(ckpt: Path, obs_dim: int, *, cvar_alpha: float | None = None) ->
     return agent
 
 
+def _forecaster_for_variant(variant: str, seed: int):
+    """``(forecaster, lstm_version)`` for one variant at one training seed.
+
+    Shared by the campaign's nine cells and by a single user-trained model, because these two
+    paths choosing their forecaster independently is exactly how the arms drift apart: the pin is
+    per training seed (A6.4), and a copy of this logic that forgets that would evaluate a seed-123
+    agent against seed 42's forecaster and record the wrong lstm_version beside the result.
+    """
+    if variant == "plain":
+        return None, None
+    if variant == "hybrid":
+        return load_forecaster(str(official_lstm_checked(seed))), official_lstm_filename(seed)
+    if variant == "random-lstm":
+        # seed-matched AND stats-matched: both must mirror train_matrix._forecaster_for exactly,
+        # or the agent is evaluated on inputs it never saw.
+        return (
+            random_forecaster(seed=seed, stats_from=load_forecaster(str(official_lstm_checked(seed)))),
+            "random-lstm",
+        )
+    raise ValueError(f"unknown variant {variant!r}")
+
+
+def user_model_algo(run_dir: Path, label: str) -> Algo:
+    """Build ONE evaluee from a run directory the user trained in the application.
+
+    The controller name is prefixed ``ui:`` so these rows are distinguishable from the campaign's
+    in every downstream query. They are NOT campaign rows: the model was trained with a different
+    episode budget, at a different time, on whatever code was current, and merging it into a
+    campaign average would silently corrupt a pre-registered result.
+    """
+    import yaml
+
+    cfg_path = run_dir / "config.yaml"
+    if not cfg_path.exists():
+        raise SystemExit(f"{run_dir} has no config.yaml - not a run directory produced by train_dqn")
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    variant = str(cfg.get("variant") or "plain")
+    seed = int(cfg.get("seed", 42))
+
+    ckpts = sorted((run_dir / "checkpoints").glob("ep*.pt"), key=lambda q: int(q.stem[2:]))
+    if not ckpts:
+        raise SystemExit(f"{run_dir} has no checkpoints/ep*.pt - train it before evaluating")
+    ckpt = ckpts[-1]  # the furthest-trained checkpoint, which for a finished run is the final one
+
+    obs_dim = OBS_DIM if variant == "plain" else HYBRID_OBS_DIM
+    forecaster, lstm_version = _forecaster_for_variant(variant, seed)
+    return Algo(
+        name=f"ui:{label}", controller_kind="dqn", agent=_load_agent(ckpt, obs_dim),
+        forecaster=forecaster, variant=f"ui:{label}", train_seed=seed,
+        lstm_version=lstm_version, ckpt=str(ckpt),
+    )
+
+
 def _dqn_algos() -> list[Algo]:
     """Build the 9 DQN evaluees from their final (ep299) checkpoints; skip any missing."""
     algos: list[Algo] = []
@@ -117,24 +170,10 @@ def _dqn_algos() -> list[Algo]:
                 print(f"[eval] WARN missing checkpoint, skipping: {ckpt}")
                 continue
             obs_dim = OBS_DIM if variant == "plain" else HYBRID_OBS_DIM
-            if variant == "plain":
-                forecaster, lstm_version = None, None
-            elif variant == "hybrid":
-                # A6.4: the pin is per DQN training seed - loading seed 42's checkpoint for
-                # every hybrid row (the old bug) recorded identical lstm_version for three
-                # arms that were actually trained against three different forecasters.
-                forecaster, lstm_version = (
-                    load_forecaster(str(official_lstm_checked(seed))), official_lstm_filename(seed),
-                )
-            else:  # random-lstm: re-create the SAME frozen control used in training
-                # seed-matched AND stats-matched: both must mirror train_matrix._forecaster_for
-                # exactly, or the agent is evaluated on inputs it never saw - including
-                # stats_from, which must come from THIS seed's official forecaster, not a
-                # fixed one, since the random control is compared against this seed's hybrid.
-                forecaster, lstm_version = (
-                    random_forecaster(seed=seed, stats_from=load_forecaster(str(official_lstm_checked(seed)))),
-                    "random-lstm",
-                )
+            # A6.4: the pin is per DQN training seed - loading seed 42's checkpoint for every
+            # hybrid row (the old bug) recorded identical lstm_version for three arms that were
+            # actually trained against three different forecasters.
+            forecaster, lstm_version = _forecaster_for_variant(variant, seed)
             algos.append(Algo(
                 name=f"dqn-{variant}-s{seed}", controller_kind="dqn",
                 agent=_load_agent(ckpt, obs_dim), forecaster=forecaster,
@@ -228,6 +267,10 @@ def main() -> None:
     parser.add_argument("--warmup", type=float, default=300.0)
     parser.add_argument("--db", type=Path, default=_DEFAULT_DB)
     parser.add_argument("--no-dqn", action="store_true", help="baselines only")
+    parser.add_argument("--model-dir", type=Path, default=None,
+                        help="evaluate ONE user-trained run directory instead of the 9 campaign cells")
+    parser.add_argument("--model-label", default=None,
+                        help="name for the --model-dir evaluee; defaults to the directory name")
     args = parser.parse_args()
 
     build_net()
@@ -251,7 +294,12 @@ def main() -> None:
             "arterial scenarios need the two-junction net and per-junction Webster plans; "
             "this runner is single-intersection only."
         )
-    dqn_algos = [] if args.no_dqn else _dqn_algos()
+    if args.model_dir is not None:
+        label = args.model_label or Path(args.model_dir).name
+        dqn_algos = [user_model_algo(Path(args.model_dir), label)]
+        print(f"[eval] single user model: {dqn_algos[0].name} <- {args.model_dir}")
+    else:
+        dqn_algos = [] if args.no_dqn else _dqn_algos()
 
     engine = create_db_engine(args.db)
     init_db(engine)
@@ -260,9 +308,13 @@ def main() -> None:
     csv_path = _OUT_DIR / "eval_results.csv"
     # A scoped/smoke run used to truncate the full campaign CSV in place, leaving the
     # analysis to build confident tables from 12 rows. Partial runs write elsewhere.
-    is_full_run = not args.scenarios and not args.no_dqn
+    is_full_run = not args.scenarios and not args.no_dqn and args.model_dir is None
     if not is_full_run:
-        tag = "-".join(args.scenarios) if args.scenarios else "no-dqn"
+        tag = (
+            f"model-{args.model_label or Path(args.model_dir).name}" if args.model_dir is not None
+            else "-".join(args.scenarios) if args.scenarios
+            else "no-dqn"
+        )
         csv_path = _OUT_DIR / f"eval_results_partial_{tag}.csv"
         print(f"[eval] partial run -> {csv_path.name} (the campaign CSV is left intact)")
     csv_f = csv_path.open("w", newline="", encoding="utf-8")

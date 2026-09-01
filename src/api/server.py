@@ -10,6 +10,10 @@ Routes::
     GET    /training/current        progress of the running / last training job
     DELETE /training/current        cancel the running training job
     WS     /ws/training             live training progress frames
+    POST   /evaluation              evaluate one user-trained model against the baselines
+    GET    /evaluation/current      progress of the running / last evaluation
+    DELETE /evaluation/current      cancel the running evaluation
+    WS     /ws/evaluation           live evaluation progress frames
     POST   /sessions                start a live episode  (409 if one is already running)
     GET    /sessions/current        status of the running / last session
     DELETE /sessions/current        stop the running session
@@ -38,9 +42,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.api.catalog import router as catalog_router
+from src.api.evaluation import MAX_UI_SEEDS, EvaluationManager
 from src.api.hub import MAX_QUEUE, Hub
 from src.api.live import CONTROLLERS, SessionBusyError, SessionManager
 from src.api.replay import router as replay_router
+from src.api.jobs import JobBusyError
 from src.api.training import MAX_UI_EPISODES, VARIANTS, TrainingBusyError, TrainingManager
 from src.api.wire import SCHEMA_VERSION
 
@@ -82,6 +88,17 @@ class StartTraining(BaseModel):
     label: str | None = Field(None, max_length=80, description="free-text label for this run")
 
 
+class StartEvaluation(BaseModel):
+    """Body of ``POST /evaluation``."""
+
+    model_id: str = Field(..., description="a run-directory name from GET /models")
+    scenario: str = Field("SCN-05", description="scenario to evaluate on")
+    seeds: int = Field(
+        5, ge=1, le=MAX_UI_SEEDS,
+        description=f"held-out eval seeds to use (1-{MAX_UI_SEEDS}); the campaign uses 15",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Bind the hubs to the running event loop and open the results database."""
@@ -89,12 +106,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.unity_hub.bind_loop(loop)
     app.state.dash_hub.bind_loop(loop)
     app.state.training_hub.bind_loop(loop)
+    app.state.evaluation_hub.bind_loop(loop)
     yield
     manager: SessionManager = app.state.sessions
     manager.stop()
     # A training child process outlives its parent unless it is asked to stop, which would leave
     # an orphan holding a SUMO instance and a run directory after the server is gone.
     app.state.training.stop()
+    app.state.evaluation.stop()
 
 
 def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None) -> FastAPI:
@@ -127,8 +146,10 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     app.state.unity_hub = Hub("unity")
     app.state.dash_hub = Hub("dash")
     app.state.training_hub = Hub("training")
+    app.state.evaluation_hub = Hub("evaluation")
     app.state.sessions = SessionManager(app.state.unity_hub, app.state.dash_hub)
     app.state.training = TrainingManager(app.state.training_hub)
+    app.state.evaluation = EvaluationManager(app.state.evaluation_hub)
     app.state.trace_dirs = list(trace_dirs) if trace_dirs is not None else list(_TRACE_DIRS)
     path = Path(db_path) if db_path is not None else _DB_PATH
     # Create the engine unconditionally: SQLite makes the file on first write, and gating
@@ -157,7 +178,8 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                     "dropped": hub.dropped_total,
                     "queue_maxsize": MAX_QUEUE,
                 }
-                for hub in (app.state.dash_hub, app.state.unity_hub, app.state.training_hub)
+                for hub in (app.state.dash_hub, app.state.unity_hub,
+                            app.state.training_hub, app.state.evaluation_hub)
             },
         }
 
@@ -278,6 +300,48 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         response.status_code = 204
         return None
 
+
+    @app.post("/evaluation", status_code=201)
+    def start_evaluation(body: StartEvaluation) -> dict[str, Any]:
+        """Evaluate one user-trained model against the baselines on shared seeds.
+
+        This is what lets a model trained in the app reach the comparison at all: the comparison
+        reads evaluation rows, and training alone produces none.
+        """
+        if body.scenario not in SCENARIOS:
+            raise HTTPException(status_code=422, detail="unknown scenario " + body.scenario)
+        try:
+            status = app.state.evaluation.start(
+                model_id=body.model_id, scenario=body.scenario, seeds=body.seeds
+            )
+        except JobBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return status.as_dict()
+
+    @app.get("/evaluation/current")
+    def current_evaluation() -> dict[str, Any]:
+        """Progress of the running (or most recent) evaluation."""
+        status = app.state.evaluation.current
+        if status is None:
+            raise HTTPException(status_code=404, detail="no evaluation has been started")
+        return status.as_dict()
+
+    @app.delete("/evaluation/current")
+    def stop_evaluation(response: Response) -> dict[str, Any] | None:
+        """Cancel the running evaluation (204 gone, 202 still unwinding)."""
+        outcome = app.state.evaluation.stop()
+        if outcome is False:
+            raise HTTPException(status_code=404, detail="no evaluation is running")
+        if outcome is None:
+            response.status_code = 202
+            return {"status": "stopping", "detail": "cancel requested; the job has not exited yet"}
+        response.status_code = 204
+        return None
+
     async def _pump(websocket: WebSocket, hub: Hub, name: str) -> None:
         """Relay one hub's frames to one client until it disconnects."""
         await websocket.accept()
@@ -306,6 +370,11 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         """1 Hz raw ``sim_frame`` envelopes - the same frames the JSONL trace records."""
         await _pump(websocket, app.state.unity_hub, "unity")
 
+
+    @app.websocket("/ws/evaluation")
+    async def ws_evaluation(websocket: WebSocket) -> None:
+        """Evaluation progress frames, one per completed episode."""
+        await _pump(websocket, app.state.evaluation_hub, "evaluation")
 
     @app.websocket("/ws/training")
     async def ws_training(websocket: WebSocket) -> None:

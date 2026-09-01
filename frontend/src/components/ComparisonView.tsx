@@ -92,7 +92,14 @@ export function ComparisonView() {
             <tbody>
               {data.rows.map((row) => (
                 <tr key={row.controller} className={row.is_ours ? "ours-row" : ""}>
-                  <td>{row.label}</td>
+                  <td>
+                    {row.label}
+                    {row.is_user_model && (
+                      <span className="yours-chip" title="trained inside this app, not part of the pre-registered campaign">
+                        yours
+                      </span>
+                    )}
+                  </td>
                   <td className="numeric-cell">{row.n_episodes}</td>
                   {/* Shown beside the KPIs, not among them: a controller that gridlocks most of
                       its episodes can post a flattering wait by never clearing the queue, so the
@@ -121,6 +128,20 @@ export function ComparisonView() {
             </tbody>
           </table>
           {data.note && <p className="control-note">{data.note}</p>}
+          {data.provenance.user_model_shas.length > 0 && (
+            <p className="control-note">
+              This scenario includes user-trained models, evaluated on different code than the
+              pre-registered campaign ({data.provenance.user_model_shas.join(", ")}) - shown for
+              comparison only.
+            </p>
+          )}
+          <p className="control-note ablation-caption">
+            Pre-registered ablation (n=15, Holm-corrected): adding the LSTM forecast to the agent's
+            state significantly DEGRADES performance — avg wait +0.62 s (p=0.004), P95 wait +2.0 s
+            (p=0.041). A random-forecast control is also significantly better than the real
+            forecast, so the loss is attributable to the forecast information itself, not to the
+            extra input capacity. This is a pre-registered negative result, not a bug.
+          </p>
 
           {/* One chart per KPI, each with its own axis. A single plot carrying both put
               seconds and vehicles-per-hour on axes three orders of magnitude apart, which
