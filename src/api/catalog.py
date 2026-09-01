@@ -159,7 +159,30 @@ _COMPARISON_SQL = text(
       JOIN episode_kpi   k ON k.episode_id_fk = e.id
      WHERE e.scenario = :scenario
        AND r.mode     = :mode
+       AND r.git_sha  = :git_sha
      GROUP BY r.controller
+    """
+)
+
+_LATEST_SHA_SQL = text(
+    """
+    SELECT r.git_sha
+      FROM experiment_run r
+     WHERE r.mode = :mode AND r.git_sha IS NOT NULL
+     GROUP BY r.git_sha
+     ORDER BY MAX(r.created_at) DESC
+     LIMIT 1
+    """
+)
+
+_ALL_SHAS_SQL = text(
+    """
+    SELECT r.git_sha AS git_sha, COUNT(e.id) AS episodes, MAX(r.created_at) AS newest
+      FROM experiment_run r
+      JOIN episode e ON e.run_id_fk = r.id
+     WHERE r.mode = :mode AND r.git_sha IS NOT NULL
+     GROUP BY r.git_sha
+     ORDER BY MAX(r.created_at) DESC
     """
 )
 
@@ -169,16 +192,28 @@ def comparison(
     request: Request,
     scenario: str = Query("SCN-05", description="scenario id, e.g. SCN-05"),
     mode: str = Query("eval", description="experiment_run.mode to compare over"),
+    git_sha: str | None = Query(
+        None, description="campaign to report; defaults to the most recent one in the database"
+    ),
 ) -> dict[str, Any]:
-    """Average KPIs per controller on one scenario, straight from the results database."""
+    """Average KPIs per controller on one scenario, for ONE campaign.
+
+    Scoped to a single ``git_sha`` on purpose. The database accumulates every campaign ever run,
+    and averaging across them silently mixes results produced by different code: this project's
+    own database holds a June campaign from the pre-gridlock-fix world alongside the current one,
+    where the SAME controller's average wait on SCN-05 differs by a factor of seven. A grouped
+    average over both is a number that describes no experiment that was ever run.
+    """
     engine = getattr(request.app.state, "engine", None)
     if engine is None:  # pragma: no cover - the app always builds one
         raise HTTPException(status_code=503, detail="results database is not available")
 
     try:
         with engine.connect() as conn:
+            campaigns = [dict(row) for row in conn.execute(_ALL_SHAS_SQL, {"mode": mode}).mappings()]
+            selected = git_sha or conn.execute(_LATEST_SHA_SQL, {"mode": mode}).scalar()
             records = [dict(row) for row in conn.execute(
-                _COMPARISON_SQL, {"scenario": scenario, "mode": mode}
+                _COMPARISON_SQL, {"scenario": scenario, "mode": mode, "git_sha": selected}
             ).mappings()]
     except DatabaseError as exc:
         # A fresh install has a database file with no schema in it yet - the tables appear on the
@@ -196,8 +231,8 @@ def comparison(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"no {mode} episodes recorded for {scenario}. Run the evaluation campaign "
-                f"(scripts/eval_runner.py) or pick another scenario."
+                f"no {mode} episodes recorded for {scenario} in campaign {selected}. Run the "
+                f"evaluation campaign (scripts/eval_runner.py) or pick another scenario."
             ),
         )
 
@@ -217,7 +252,6 @@ def comparison(
     # Order by the headline KPI so the table reads as a ranking without the client sorting it.
     rows.sort(key=lambda r: (r["avg_waiting_time"] is None, r["avg_waiting_time"] or 0.0))
 
-    shas = sorted({r["git_sha"] for r in records if r["git_sha"]})
     newest = max((r["newest_run_at"] for r in records if r["newest_run_at"]), default=None)
     return {
         "scenario": scenario,
@@ -225,12 +259,19 @@ def comparison(
         "rows": rows,
         "kpis": [dict(spec) for spec in KPI_SPEC],
         "provenance": {
-            "git_shas": shas,
+            "git_sha": selected,
             "newest_run_at": str(newest) if newest else None,
             "source": "data/traffic.db",
+            # Every campaign in the database, newest first, so the client can offer a switch and a
+            # reader can see that older results exist rather than assuming these are the only ones.
+            "available_campaigns": [
+                {"git_sha": c["git_sha"], "episodes": int(c["episodes"]), "newest_run_at": str(c["newest"])}
+                for c in campaigns
+            ],
         },
         "note": (
-            "Averages over the episodes in the results database. Episodes are paired by seed "
+            f"Campaign {selected} only - results from other campaigns are never averaged in. "
+            "Episodes are paired by seed "
             "across controllers. A high gridlock rate means the controller could not clear the "
             "demand, so its wait and throughput are not directly comparable to an uncensored "
             "row - that is why the rate is shown beside them."
