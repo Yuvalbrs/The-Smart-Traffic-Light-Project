@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { ApiError, getControllers, getCurrentSession, startSession, stopSession } from "../lib/api";
+import {
+  ApiError,
+  getControllers,
+  getCurrentSession,
+  getViewer,
+  startSession,
+  startViewer,
+  stopSession,
+} from "../lib/api";
+import type { ViewerStatus } from "../lib/api";
 import type { ControllersResponse, SessionStatus } from "../lib/wire";
 
 const POLL_MS = 2000;
@@ -22,6 +31,11 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
   // behind `{options && ...}` - so with the hub down this panel rendered blank and said nothing.
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // The hub can launch the built Unity player (POST /viewer). The endpoints existed but nothing
+  // called them, so opening the 3-D view meant finding an .exe by hand or opening the editor -
+  // three manual steps in a demo that is otherwise one double-click.
+  const [viewer, setViewer] = useState<ViewerStatus | null>(null);
+  const [viewerBusy, setViewerBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,6 +79,32 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getViewer()
+      .then((v) => {
+        if (!cancelled) setViewer(v);
+      })
+      .catch(() => {
+        // the hub banner above already reports an unreachable server
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  const handleOpenViewer = async () => {
+    setViewerBusy(true);
+    setError(null);
+    try {
+      setViewer(await startViewer());
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setViewerBusy(false);
+    }
+  };
 
   const running = session?.state === "starting" || session?.state === "running";
 
@@ -179,6 +219,22 @@ export function ControlPanel({ onSessionChange }: { onSessionChange: (s: Session
               stop session
             </button>
           </div>
+          {viewer && (
+            <div className="viewer-launch">
+              <button
+                onClick={handleOpenViewer}
+                disabled={viewerBusy || !viewer.available || viewer.running}
+                title={viewer.available ? viewer.path : (viewer.hint ?? "")}
+              >
+                {viewer.running ? "3-D view is open" : "open 3-D view"}
+              </button>
+              <p className="control-note">
+                {viewer.available
+                  ? "Opens the Unity window on this same episode feed."
+                  : viewer.hint}
+              </p>
+            </div>
+          )}
         </div>
       )}
       {error && <p className="error-text">{error}</p>}

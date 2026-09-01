@@ -68,6 +68,22 @@ export const getRunMetadata = (runId: string) =>
 export const getRunKpis = (runId: string) =>
   request<RunKpisResponse>(`/runs/${encodeURIComponent(runId)}/kpis`);
 
+// --- REST: /viewer (the Unity 3-D window) ----------------------------------
+
+export interface ViewerStatus {
+  available: boolean;
+  running: boolean;
+  path: string;
+  /** Set when the player has not been built - tells the reader how to build it. */
+  hint: string | null;
+  /** Always set: how to get the same view from the Unity editor instead. */
+  editor_hint: string;
+}
+
+export const getViewer = () => request<ViewerStatus>("/viewer");
+
+export const startViewer = () => request<ViewerStatus>("/viewer", { method: "POST" });
+
 // --- REST: /models ---------------------------------------------------------
 
 export interface ModelInfo {

@@ -2,9 +2,15 @@
 
 The demo used to need three manual steps in three terminals (uvicorn, `npm run dev`, Unity
 Play). This collapses the "run it" part to one: double-click `run_app.bat` (which just calls
-`.venv\\Scripts\\python.exe run_app.py`) or run `python run_app.py` directly. Unity stays a
-separate, optional step (see `unity/README.md`) - it is a 3-D *view* of the same live episode,
-not a dependency of the web app.
+`.venv\\Scripts\\python.exe run_app.py`) or run `python run_app.py` directly.
+
+The 3-D window is now one click further in, not a fourth terminal: the dashboard's **open 3-D
+view** button posts to `/viewer`, which launches the built Unity player onto the same episode
+feed (`src/api/viewer.py`). It is deliberately NOT started here. It is a *view* of a live
+episode, not a dependency of the web app; a machine with no player build would fail at startup
+for something optional, and a demo that always opens a second window cannot choose not to.
+Where no build exists the button explains how to make one, and `unity/README.md` covers the
+Unity-Editor route.
 
 What this does NOT do: start `npm run dev`. The FastAPI hub serves the already-built SPA
 (`frontend/dist/`) at `/` itself, so a Vite dev server on :5173 would just be a second,
