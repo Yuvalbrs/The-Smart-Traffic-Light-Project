@@ -14,6 +14,9 @@ Routes::
     GET    /evaluation/current      progress of the running / last evaluation
     DELETE /evaluation/current      cancel the running evaluation
     WS     /ws/evaluation           live evaluation progress frames
+    GET    /viewer                  is the Unity 3D viewer built, and is it running?
+    POST   /viewer                  launch the Unity 3D viewer beside the dashboard
+    DELETE /viewer                  close it
     POST   /sessions                start a live episode  (409 if one is already running)
     GET    /sessions/current        status of the running / last session
     DELETE /sessions/current        stop the running session
@@ -48,6 +51,7 @@ from src.api.live import CONTROLLERS, SessionBusyError, SessionManager
 from src.api.replay import router as replay_router
 from src.api.jobs import JobBusyError
 from src.api.training import MAX_UI_EPISODES, VARIANTS, TrainingBusyError, TrainingManager
+from src.api.viewer import ViewerManager
 from src.api.wire import SCHEMA_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -114,6 +118,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # an orphan holding a SUMO instance and a run directory after the server is gone.
     app.state.training.stop()
     app.state.evaluation.stop()
+    # The viewer is a window the user opened from the app; closing the app closes it too, rather
+    # than leaving an orphaned 3D window connected to a hub that no longer exists.
+    app.state.viewer.stop()
 
 
 def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None) -> FastAPI:
@@ -150,6 +157,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     app.state.sessions = SessionManager(app.state.unity_hub, app.state.dash_hub)
     app.state.training = TrainingManager(app.state.training_hub)
     app.state.evaluation = EvaluationManager(app.state.evaluation_hub)
+    app.state.viewer = ViewerManager()
     app.state.trace_dirs = list(trace_dirs) if trace_dirs is not None else list(_TRACE_DIRS)
     path = Path(db_path) if db_path is not None else _DB_PATH
     # Create the engine unconditionally: SQLite makes the file on first write, and gating
@@ -339,6 +347,28 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         if outcome is None:
             response.status_code = 202
             return {"status": "stopping", "detail": "cancel requested; the job has not exited yet"}
+        response.status_code = 204
+        return None
+
+
+    @app.get("/viewer")
+    def viewer_status() -> dict[str, Any]:
+        """Whether the Unity viewer can be launched, and whether it already is."""
+        return app.state.viewer.status()
+
+    @app.post("/viewer", status_code=201)
+    def start_viewer() -> dict[str, Any]:
+        """Open the Unity 3D window beside the dashboard, on the same 1 Hz feed."""
+        try:
+            return app.state.viewer.start()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/viewer")
+    def stop_viewer(response: Response) -> dict[str, Any] | None:
+        """Close the viewer window."""
+        if not app.state.viewer.stop():
+            raise HTTPException(status_code=404, detail="the viewer is not running")
         response.status_code = 204
         return None
 

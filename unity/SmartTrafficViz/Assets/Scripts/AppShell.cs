@@ -15,13 +15,14 @@ namespace SmartTraffic
 {
     public class AppShell : MonoBehaviour
     {
-        public enum Screen { Menu, Live, Controls, About }
+        public enum Screen { Menu, Live, Dashboard, Controls, About }
 
         public string HubUrl = "ws://127.0.0.1:8000/ws/unity";
 
         public Screen Current { get; private set; } = Screen.Menu;
 
         private TrafficViz _viz;
+        private DashboardScreen _dash;
         private Camera _menuCam;
         private SessionControl _session;
         private RunConfig _cfg = RunConfig.Default;
@@ -46,6 +47,17 @@ namespace SmartTraffic
 
             if (Current == Screen.Live && Input.GetKeyDown(KeyCode.Tab)) _overlay = !_overlay;
 
+            // Draining the feed is main-thread work and must happen every frame the screen is up,
+            // not inside OnGUI - OnGUI runs several times per frame for layout and events.
+            _dash?.Tick();
+
+            // D toggles straight between the picture and the numbers, so a demo can move between
+            // them without going back out to the menu each time.
+            if (Input.GetKeyDown(KeyCode.D) && (Current == Screen.Live || Current == Screen.Dashboard))
+            {
+                Go(Current == Screen.Live ? Screen.Dashboard : Screen.Live);
+            }
+
             // Escape backs out one level: first close the overlay, then leave the screen.
             if (Input.GetKeyDown(KeyCode.Escape) && !InFreeCamera())
             {
@@ -60,6 +72,12 @@ namespace SmartTraffic
             _session.Switch(_cfg);
             _overlay = false;
             if (Current != Screen.Live) Go(Screen.Live);
+        }
+
+        private void OnDestroy()
+        {
+            _dash?.Dispose();
+            _dash = null;
         }
 
         private bool InFreeCamera()
@@ -78,8 +96,20 @@ namespace SmartTraffic
                 Destroy(_viz.gameObject);
                 _viz = null;
             }
+            if (Current == Screen.Dashboard && _dash != null)
+            {
+                // Leaving the screen releases the socket, exactly as leaving Live releases the
+                // 3-D view's - an idle screen must not keep a subscription open on the hub.
+                _dash.Dispose();
+                _dash = null;
+            }
 
             Current = screen;
+
+            if (screen == Screen.Dashboard)
+            {
+                _dash = new DashboardScreen(HubUrl);
+            }
 
             if (screen == Screen.Live)
             {
@@ -109,6 +139,7 @@ namespace SmartTraffic
                 case Screen.Menu: DrawMenu(); break;
                 case Screen.Controls: DrawControls(); break;
                 case Screen.About: DrawAbout(); break;
+                case Screen.Dashboard: DrawDashboard(); break;
                 case Screen.Live: DrawLiveBar(); break;
             }
         }
@@ -116,7 +147,7 @@ namespace SmartTraffic
         private void DrawMenu()
         {
             const float w = 420f, rowH = 44f, gap = 10f;
-            var h = 320f;
+            var h = 374f;   // one row taller since the dashboard entry joined the menu
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
                 (UnityEngine.Screen.height - h) / 2f, w, h);
 
@@ -138,6 +169,12 @@ namespace SmartTraffic
             }
             y += rowH + gap;
 
+            if (GUI.Button(new Rect(bx, y, bw, rowH), "Live dashboard", UITheme.Button))
+            {
+                Go(Screen.Dashboard);
+            }
+            y += rowH + gap;
+
             if (GUI.Button(new Rect(bx, y, bw, rowH), "Choose scene + controller", UITheme.Button))
             {
                 Go(Screen.Controls);
@@ -151,6 +188,21 @@ namespace SmartTraffic
             y += rowH + gap + 6f;
 
             GUI.Label(new Rect(bx, y, bw, 20f), "hub: " + HubUrl, Centered(UITheme.Hint));
+        }
+
+        private void DrawDashboard()
+        {
+            _dash?.Draw();
+            if (GUI.Button(new Rect(20f, UnityEngine.Screen.height - 44f, 150f, 30f),
+                    "Back  Esc", UITheme.Button))
+            {
+                Go(Screen.Menu);
+            }
+            if (GUI.Button(new Rect(180f, UnityEngine.Screen.height - 44f, 170f, 30f),
+                    "3-D view  D", UITheme.Button))
+            {
+                Go(Screen.Live);
+            }
         }
 
         private void DrawControls()
