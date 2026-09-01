@@ -59,9 +59,13 @@ _SEL_PLAIN_LOG = _REPO_ROOT / "runs" / "compare_sel_plain.log"
 _OUT_DIR = _REPO_ROOT / "data" / "eval" / "analysis"
 
 TEST_SCENARIO = "SCN-05"
-from src.provenance.official import official_lstm_version
+from src.provenance.official import official_lstm_versions
 
-DEPLOYED_LSTM_VERSION = official_lstm_version()  # derived, never hand-pinned
+# A6.4 deploys one forecaster PER DQN training seed, so "the deployed version" is no longer a
+# single string. Derived, never hand-pinned. The inverse map answers the question the T3 table
+# actually asks of each report row: "was this one deployed, and if so with which seed?"
+DEPLOYED_LSTM_VERSIONS = official_lstm_versions()          # {seed: "lstm-<hash>"}
+DEPLOYED_SEED_BY_VERSION = {v: k for k, v in DEPLOYED_LSTM_VERSIONS.items()}
 HEADLINE_VARIANTS = ("hybrid", "plain", "random-lstm")
 BASELINE_ALGOS = ("webster", "max_pressure", "actuated")
 # Display order + labels for T1/T2 rows (baselines first, then the 3 DQN variants).
@@ -467,18 +471,30 @@ def build_t3_lstm_standalone() -> pd.DataFrame:
         gate = d.get("gate", {})
         ss_near = gate.get("ss_h1", gate.get("ss_near", float("nan")))
         ss_far = gate.get("ss_h3", gate.get("ss_far", float("nan")))
+        # A6.3.4: the gate reads the first and last forecast points only. The middle one has been
+        # the worst in every run ever trained here, so a table that prints the verdict without it
+        # is a table that hides the reason to distrust the verdict.
+        all_ss = d.get("skill_scores_val") or []
+        ss_mid = all_ss[1] if len(all_ss) == 3 else float("nan")
+        # The corpus hash covers all 100 CSVs whichever subset is read, so pre- and post-A6 runs
+        # carry the SAME data_version. Only the split distinguishes them, and reports written
+        # before A6.4 carry none - printing it is what stops two experiments merging in one table.
+        splits = d.get("splits")
+        version = d.get("lstm_version")
         records.append(
             {
-                "lstm_version": d.get("lstm_version"),
+                "lstm_version": version,
                 "seed": d.get("seed"),
+                "train_split": ",".join(splits["train"]) if splits else "SCN-01,SCN-02,SCN-03 (pre-A6)",
                 "val_mse": d.get("val_mse"),
                 "test_mse": d.get("test_mse"),
                 "r2_val": d.get("r2_val"),
                 "skill_score_nearest_horizon": ss_near,
+                "skill_score_middle_horizon_UNGATED": ss_mid,
                 "skill_score_farthest_horizon": ss_far,
                 "gate_verdict": gate.get("verdict"),
                 "ship": gate.get("ship"),
-                "deployed": d.get("lstm_version") == DEPLOYED_LSTM_VERSION,
+                "deployed_for_train_seed": DEPLOYED_SEED_BY_VERSION.get(version, ""),
             }
         )
     return pd.DataFrame.from_records(records)
@@ -943,11 +959,22 @@ def main() -> None:
     )
 
     # T3 / T4
-    write_table(build_t3_lstm_standalone(), "T3_lstm_standalone", _OUT_DIR,
-                "T3: LSTM standalone eval - all 6 training attempts",
-                f"Deployed = {DEPLOYED_LSTM_VERSION} (SHIP_WITH_CAVEAT). Only 2 of 6 attempts passed "
-                "the skill-score gate. MSE is the LSTM's own held-out val/test split, not decomposed "
-                "per-scenario in the source jsons - no SCN-05-only forecast MSE exists on disk.")
+    t3 = build_t3_lstm_standalone()
+    n_total = len(t3)
+    n_ship = int(t3["ship"].fillna(False).astype(bool).sum())
+    deployed = ", ".join(f"seed {s} -> {v}" for s, v in sorted(DEPLOYED_LSTM_VERSIONS.items()))
+    write_table(t3, "T3_lstm_standalone", _OUT_DIR,
+                f"T3: LSTM standalone eval - all {n_total} training attempts",
+                f"Deployed (A6.4, one forecaster per DQN training seed): {deployed}. "
+                f"{n_ship} of {n_total} attempts passed the skill-score gate. "
+                "Read `train_split` before comparing rows: pre- and post-A6 runs share one corpus "
+                "hash and differ only in the split, and the pre-A6 rows are the pre-registered "
+                "PRIMARY forecaster result (A6.3.1) while the SCN-10 rows are the declared "
+                "SECONDARY analysis (A6.3.2). `skill_score_middle_horizon_UNGATED` is the 90 s "
+                "point the freeze gate never inspects; it is negative in every run, so every "
+                "SHIP verdict here is a verdict over two of the model's three outputs (A6.3.4). "
+                "MSE is the LSTM's own held-out val/test split, not decomposed per-scenario in "
+                "the source jsons - no SCN-05-only forecast MSE exists on disk.")
     write_table(build_t4_wallclock_budget(), "T4_wallclock_budget", _OUT_DIR,
                 "T4: Wall-clock budget per condition",
                 "GAP: no wall-clock timing field was found in config.yaml, episodes.csv, steps.csv, "

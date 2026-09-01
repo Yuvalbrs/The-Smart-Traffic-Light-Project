@@ -49,7 +49,7 @@ from src.env.sumo_env import SUMOEnv
 from src.metrics.kpi_extractor import EpisodeKPIs, extract_kpis
 from src.ml.dqn import OBS_DIM, DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster, random_forecaster
-from src.provenance.official import OFFICIAL_LSTM, official_lstm_checked
+from src.provenance.official import official_lstm_checked, official_lstm_filename
 from src.provenance.records import record_experiment_run
 from src.provenance.versions import git_sha, sumo_version
 from src.scenarios.config import SCENARIO_DIR, Scenario, load_all, load_scenario
@@ -58,7 +58,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
 _OUT_DIR = _REPO_ROOT / "data" / "eval"
 _DEFAULT_DB = _REPO_ROOT / "data" / "traffic.db"
-_OFFICIAL_LSTM = OFFICIAL_LSTM  # single source of truth: src/provenance/official.py
 # The pre-registered confirmatory scenario set (prereg s2). SCN-05 is the held-out
 # test regime; SCN-01..03 are the training regimes; SCN-04 is the interpolation check.
 CONFIRMATORY_SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")
@@ -121,12 +120,19 @@ def _dqn_algos() -> list[Algo]:
             if variant == "plain":
                 forecaster, lstm_version = None, None
             elif variant == "hybrid":
-                forecaster, lstm_version = load_forecaster(str(official_lstm_checked())), _OFFICIAL_LSTM.name
+                # A6.4: the pin is per DQN training seed - loading seed 42's checkpoint for
+                # every hybrid row (the old bug) recorded identical lstm_version for three
+                # arms that were actually trained against three different forecasters.
+                forecaster, lstm_version = (
+                    load_forecaster(str(official_lstm_checked(seed))), official_lstm_filename(seed),
+                )
             else:  # random-lstm: re-create the SAME frozen control used in training
                 # seed-matched AND stats-matched: both must mirror train_matrix._forecaster_for
-                # exactly, or the agent is evaluated on inputs it never saw.
+                # exactly, or the agent is evaluated on inputs it never saw - including
+                # stats_from, which must come from THIS seed's official forecaster, not a
+                # fixed one, since the random control is compared against this seed's hybrid.
                 forecaster, lstm_version = (
-                    random_forecaster(seed=seed, stats_from=load_forecaster(str(official_lstm_checked()))),
+                    random_forecaster(seed=seed, stats_from=load_forecaster(str(official_lstm_checked(seed)))),
                     "random-lstm",
                 )
             algos.append(Algo(

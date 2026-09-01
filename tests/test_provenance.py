@@ -250,3 +250,125 @@ def test_official_pin_staleness_guard_fires_on_a_regenerated_corpus(tmp_path):
         assert_official_matches_corpus(tmp_path)
     except RuntimeError as exc:
         assert official_data_version() in str(exc)
+
+
+# ------------------------------------------------------------------------------------------
+# A6.4 - the pin is per DQN training seed
+# ------------------------------------------------------------------------------------------
+
+
+def test_every_training_seed_gets_its_own_forecaster():
+    """No two DQN training seeds may share a forecaster.
+
+    This is the whole point of A6.4. Under the single pin, three "independent" hybrid runs
+    carried ONE forecaster, so forecaster-training variance was replicated zero times - while
+    the gate verdict is known to flip sign across forecaster seeds on identical data. If a
+    future edit collapses two seeds onto one checkpoint, the runs silently stop being
+    independent and nothing else in the suite would notice.
+    """
+    from src.provenance.official import OFFICIAL_LSTM_BY_SEED, OFFICIAL_TRAIN_SEEDS
+
+    assert set(OFFICIAL_TRAIN_SEEDS) == {42, 123, 2024}
+    filenames = [OFFICIAL_LSTM_BY_SEED[s] for s in OFFICIAL_TRAIN_SEEDS]
+    assert len(set(filenames)) == len(filenames), f"seeds share a forecaster: {filenames}"
+    assert "PENDING" not in filenames
+
+
+def test_no_seed_agnostic_accessor_exists():
+    """A call site that cannot name its seed was silently mixing three experiments.
+
+    Asserted behaviourally - each accessor is CALLED with no argument and must reject it -
+    rather than by inspecting signatures, so re-adding a seed-agnostic default (the exact
+    regression this guards) fails the test instead of passing a signature check.
+    """
+    import pytest as _pytest
+
+    from src.provenance import official
+
+    for name in ("official_lstm_filename", "official_lstm_path",
+                 "official_lstm_version", "official_lstm_checked"):
+        with _pytest.raises(TypeError):
+            getattr(official, name)()
+
+
+def test_unknown_seed_is_refused_and_names_the_pinned_seeds():
+    """Borrowing another seed's forecaster must be impossible, not merely discouraged."""
+    import pytest as _pytest
+
+    from src.provenance.official import OFFICIAL_TRAIN_SEEDS, official_lstm_filename
+
+    with _pytest.raises(KeyError) as exc:
+        official_lstm_filename(7)
+    for seed in OFFICIAL_TRAIN_SEEDS:
+        assert str(seed) in str(exc.value)
+
+
+def test_all_pins_agree_on_their_corpus():
+    """Three seeds of ONE training process over ONE corpus; a disagreement means piecemeal pins."""
+    from src.provenance.official import (
+        OFFICIAL_LSTM_BY_SEED, OFFICIAL_TRAIN_SEEDS, official_data_version,
+    )
+
+    assert official_data_version().startswith("data-")
+    tags = {f for s in OFFICIAL_TRAIN_SEEDS
+            for f in OFFICIAL_LSTM_BY_SEED[s].split("__") if f.startswith("data-")}
+    assert len(tags) == 1, f"pins disagree about the corpus: {tags}"
+
+
+def test_corpus_guard_checks_every_seed_not_only_the_one_being_loaded(monkeypatch, tmp_path):
+    """A guard that validated only the arm you happen to run would pass a half-stale matrix.
+
+    Seed 42's pin is left matching the fabricated corpus and seed 2024's is made stale, and both
+    checkpoint files are made to exist - so the ONLY thing that can fail is 2024's staleness. A
+    guard that stopped at the first seed, or checked only the seed being loaded, returns clean
+    here and fails this test.
+    """
+    import json
+
+    import pytest as _pytest
+
+    from scripts.train_lstm import _dataset_data_version
+    from src.provenance import official
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "manifest.json").write_text(
+        json.dumps([{"file": "a.csv", "data_version": "data-x", "file_sha256": "cd" * 32}]),
+        encoding="utf-8")
+    on_disk = _dataset_data_version(corpus)
+
+    ckpts = tmp_path / "ckpts"
+    ckpts.mkdir()
+    pins = {
+        42: f"lstm__{on_disk}__lstm-aaaaaaaaaaaa.pt",        # matches the fabricated corpus
+        2024: "lstm__data-stalestale__lstm-bbbbbbbbbbbb.pt",  # does not
+    }
+    for name in pins.values():
+        (ckpts / name).write_bytes(b"")  # existence only; the guard never opens them
+    monkeypatch.setattr(official, "CKPT_DIR", ckpts)
+    monkeypatch.setattr(official, "OFFICIAL_LSTM_BY_SEED", pins)
+    monkeypatch.setattr(official, "OFFICIAL_TRAIN_SEEDS", (42, 2024))
+
+    with _pytest.raises(RuntimeError, match="stale") as exc:
+        official.assert_official_matches_corpus(corpus)
+    assert "2024" in str(exc.value)
+
+
+def test_split_guard_fires_when_the_pinned_checkpoints_trained_on_another_split(monkeypatch):
+    """The corpus hash is structurally blind to the split - this is the guard that is not.
+
+    ``data_version`` hashes all 100 CSVs whichever subset is read, so changing SPLITS leaves it
+    identical and the corpus guard passes a checkpoint trained on different data. A6.4 put the
+    split inside the checkpoint for exactly this; the guard reads it back.
+    """
+    import pytest as _pytest
+
+    from src.ml import lstm_data
+    from src.provenance.official import assert_official_matches_split
+
+    assert_official_matches_split()  # the real pins match the real split
+    monkeypatch.setattr(lstm_data, "SPLITS", {
+        "train": ("SCN-01",), "val": ("SCN-04",), "test": ("SCN-05",),
+    })
+    with _pytest.raises(RuntimeError, match="DIFFERENT split"):
+        assert_official_matches_split()

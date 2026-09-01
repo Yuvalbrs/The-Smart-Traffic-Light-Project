@@ -44,7 +44,7 @@ from scripts.env_factory import build_env, load_scenario_by_id
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
-from src.provenance.official import OFFICIAL_LSTM, official_lstm_checked
+from src.provenance.official import official_lstm_checked
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -131,11 +131,14 @@ def main() -> None:
         parser.error("--random-lstm and --forecast-ckpt are mutually exclusive")
     if args.random_lstm:
         variant = args.variant or "random-lstm"
-        # scale-match against the DEPLOYED forecaster, exactly as train_matrix.py and
-        # eval_runner.py do - otherwise this path trains on raw-unit inputs and eval
-        # rebuilds the control standardized, a mismatch neither side would report.
+        # scale-match against THIS seed's deployed forecaster, exactly as train_matrix.py
+        # and eval_runner.py do - the pin is per DQN training seed (A6.4), so a run at
+        # seed 123 must scale-match to the seed-123 checkpoint, not some other seed's.
         forecaster, fc_label = (
-            random_forecaster(seed=args.seed, stats_from=load_forecaster(str(official_lstm_checked()))),
+            random_forecaster(
+                seed=args.seed,
+                stats_from=load_forecaster(str(official_lstm_checked(args.seed))),
+            ),
             "random-lstm",
         )
     elif args.forecast_ckpt:

@@ -27,7 +27,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.ml.lstm_data import _DATA_DIR, DEFAULT_TARGET_OFFSETS, make_dataloaders
+from src.ml.lstm_data import _DATA_DIR, DEFAULT_TARGET_OFFSETS, SPLITS, make_dataloaders
 from src.ml.lstm_model import (
     DROPOUT,
     HIDDEN_SIZE,
@@ -170,6 +170,7 @@ def main() -> None:
     )
     sizes = {k: len(v.dataset) for k, v in loaders.items()}
     print(f"[lstm-train] windows: {sizes}")
+    print(f"[lstm-train] splits:  " + " | ".join(f"{k}={','.join(v)}" for k, v in sorted(SPLITS.items())))
 
     model = LSTMForecaster()
     # Fit the input normalizer on the TRAIN windows only (no val/test leakage),
@@ -192,6 +193,11 @@ def main() -> None:
         "max_epochs": args.max_epochs, "patience": args.patience,
         "head": "residual",  # ADR-005: forecast = current_queue + delta
         "target_offsets": list(offsets),  # ADR-006: 60/90/120 s horizon
+        # The SPLIT is a training input and belongs in the id. It was in none of the four
+        # ingredients of lstm_version: data_version hashes all 100 CSVs whichever subset is
+        # actually read, so two forecasters trained on different splits of one corpus were
+        # distinguishable only incidentally, via the code SHA. Amendment A6.4.
+        "splits": {k: list(v) for k, v in sorted(SPLITS.items())},
     }
     data_v = _dataset_data_version(_DATA_DIR)
     lstm_v = lstm_version(
@@ -212,6 +218,7 @@ def main() -> None:
         "lstm_version": lstm_v, "data_version": data_v, "seed": args.seed,
         "target_offsets_steps": list(offsets), "horizon_seconds": [o * 10 for o in offsets],
         "window_sizes": sizes, "epochs_run": len(history),
+        "splits": {k: list(v) for k, v in sorted(SPLITS.items())},  # A6.4: readable, not just hashed
         "val_mse": val_mse, "test_mse": test_mse,
         "skill_scores_val": gate_metrics["skill_scores"], "r2_val": gate_metrics["r2"],
         "gate": asdict(decision), "checkpoint": ckpt_path.name,

@@ -79,9 +79,12 @@ def test_window_values_are_correctly_sliced(data_dir) -> None:
 
 
 def test_windows_per_file_count(data_dir) -> None:
-    """One file -> _WINDOWS_PER_FILE windows; train has 3 scenarios x 1 file."""
+    """One file -> _WINDOWS_PER_FILE windows; a split's total = its scenario count x 1 file."""
     assert len(LSTMDataset([data_dir / "scn_01_seed_00.csv"])) == _WINDOWS_PER_FILE
-    assert len(load_split("train", data_dir)) == 3 * _WINDOWS_PER_FILE
+    assert len(SPLITS["train"]) > 0  # guard: derived expectation below must be > 0
+    expected_train = len(SPLITS["train"]) * _WINDOWS_PER_FILE
+    assert expected_train > 0
+    assert len(load_split("train", data_dir)) == expected_train
 
 
 def test_no_leakage_across_files_or_splits(data_dir) -> None:
@@ -112,17 +115,22 @@ def test_dataloaders_batch(data_dir) -> None:
 
 
 def test_split_sizes_documented(data_dir) -> None:
-    sizes = split_sizes(data_dir)
-    assert sizes == {
-        "train": 3 * _WINDOWS_PER_FILE, "val": _WINDOWS_PER_FILE, "test": _WINDOWS_PER_FILE,
+    """Each split's window count = its scenario count x _WINDOWS_PER_FILE, derived from SPLITS."""
+    assert all(len(scenario_ids) > 0 for scenario_ids in SPLITS.values())  # guard: no empty split
+    expected = {
+        split: len(scenario_ids) * _WINDOWS_PER_FILE for split, scenario_ids in SPLITS.items()
     }
+    assert all(count > 0 for count in expected.values())  # guard: no zero-sized expectation
+    sizes = split_sizes(data_dir)
+    assert sizes == expected
 
 
 def test_real_data_if_present() -> None:
-    """If the real 50 CSVs exist, the split sizes are sane and disjoint-nonzero."""
+    """If the real CSVs exist, every split's size is sane (nonzero) and disjoint-nonzero."""
     from src.ml.lstm_data import _DATA_DIR
 
     if not list(_DATA_DIR.glob("scn_*_seed_*.csv")):
         pytest.skip("real LSTM CSVs not generated")
+    assert all(len(scenario_ids) > 0 for scenario_ids in SPLITS.values())  # guard: no empty split
     sizes = split_sizes()
-    assert sizes["train"] > sizes["val"] > 0 and sizes["test"] > 0
+    assert all(sizes[split] > 0 for split in SPLITS)

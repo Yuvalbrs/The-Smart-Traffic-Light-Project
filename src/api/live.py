@@ -60,6 +60,11 @@ CONTROLLERS = (
     "actuated",
 )
 
+# The DQN training seed the live demo runs. Picks BOTH which run-dir checkpoint is loaded and
+# which official forecaster is paired with it (src/provenance/official.py A6.4: the pin is per
+# DQN training seed) - one constant so the two selections cannot drift to different seeds.
+LIVE_TRAIN_SEED = 42
+
 
 class SessionBusyError(RuntimeError):
     """Raised when a session is requested while another is already running."""
@@ -312,29 +317,29 @@ class LiveSession:
         if self.controller in ("webster", "max_pressure", "actuated"):
             algo = baselines[self.controller]
         elif self.controller in ("dqn-plain", "sel/plain"):
-            ckpt = _REPO_ROOT / "runs" / "plain_seed42" / "checkpoints" / "ep299.pt"
+            ckpt = _REPO_ROOT / "runs" / f"plain_seed{LIVE_TRAIN_SEED}" / "checkpoints" / "ep299.pt"
             algo = Algo(
                 self.controller,
                 "dqn",
                 agent=_load_agent(ckpt, OBS_DIM),
                 variant="plain",
-                train_seed=42,
+                train_seed=LIVE_TRAIN_SEED,
                 ckpt=str(ckpt),
             )
         else:  # dqn-hybrid
-            from scripts.eval_runner import _OFFICIAL_LSTM, load_forecaster
-            from src.provenance.official import official_lstm_checked
+            from scripts.eval_runner import load_forecaster
+            from src.provenance.official import official_lstm_checked, official_lstm_filename
             from src.ml.hybrid_wrapper import HYBRID_OBS_DIM
 
-            ckpt = _REPO_ROOT / "runs" / "hybrid_seed42" / "checkpoints" / "ep299.pt"
+            ckpt = _REPO_ROOT / "runs" / f"hybrid_seed{LIVE_TRAIN_SEED}" / "checkpoints" / "ep299.pt"
             algo = Algo(
                 self.controller,
                 "dqn",
                 agent=_load_agent(ckpt, HYBRID_OBS_DIM),
-                forecaster=load_forecaster(str(official_lstm_checked())),
+                forecaster=load_forecaster(str(official_lstm_checked(LIVE_TRAIN_SEED))),
                 variant="hybrid",
-                train_seed=42,
-                lstm_version=_OFFICIAL_LSTM.name,
+                train_seed=LIVE_TRAIN_SEED,
+                lstm_version=official_lstm_filename(LIVE_TRAIN_SEED),
                 ckpt=str(ckpt),
             )
 

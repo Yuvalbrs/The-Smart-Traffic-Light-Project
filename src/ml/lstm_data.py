@@ -20,11 +20,11 @@ PINNED (DoD: no cross-reference to "Chat 2"):
 * ``STRIDE    = 1``   one window per start row.
 
 Split is **scenario-level, not random-window** (lstm-forecasting.md "Why
-scenario-level split"): train SCN-01/02/03, val SCN-04, test SCN-05. Windows are
-built **per file**, so a single window never spans two episodes and never crosses a
-train/val/test boundary - the leakage guard the DoD requires. A random window split
-would leak: windows from one scenario share dynamics, so validating on other windows
-of a *seen* scenario lets the model see the val distribution.
+scenario-level split"): see ``SPLITS``. Windows are built **per file**, so a single
+window never spans two episodes and never crosses a train/val/test boundary - the
+leakage guard the DoD requires. A random window split would leak: windows from one
+scenario share dynamics, so validating on other windows of a *seen* scenario lets the
+model see the val distribution.
 
 Normalization: NOT applied here - the loader yields raw queue/count values and the
 training loop owns any scaling (lstm-forecasting.md trains on raw MSE; queue and
@@ -56,10 +56,27 @@ STRIDE = 1
 # the hybrid state stays 56-dim (no DQN-side change).
 DEFAULT_TARGET_OFFSETS: tuple[int, ...] = (6, 9, 12)
 
-# Scenario-level split (lstm-forecasting.md "Training data" table). Disjoint by
-# construction - asserted in the leakage test.
+# Scenario-level split. Disjoint by construction - asserted in the leakage test.
+#
+# **Amendment A6 (2026-09-01)** added SCN-10 to train. Before it, train was SCN-01
+# (constant demand), SCN-02 (constant) and SCN-03 (one monotone ramp, then hold) while
+# test was SCN-05 - *both axes oscillating 200-600 vph continuously, 90 deg out of
+# phase*. The forecaster therefore never saw shifting demand in training and was scored
+# on nothing else, so its test MSE measured extrapolation to an unseen regime as much as
+# it measured forecasting. SCN-10 ("Fast-shifting (training)") is the scenario built to
+# supply that exposure and is already in the DQN's training rotation.
+#
+# SCN-06/07/08/09 are deliberately EXCLUDED and must stay excluded: SCN-06 is a DQN
+# evaluation scenario and SCN-07/08/09 each declare themselves held-out test scenarios in
+# their own YAML. Training the forecaster on them would make SCN-08/09 non-zero-shot for
+# the `hybrid` arm while they stay zero-shot for `plain` - an asymmetric leak favouring
+# the hypothesis under test. Half this corpus is *supposed* to go unread; it is the
+# evaluation half. Changing that needs its own amendment (preregistration.md A6.2).
+#
+# SCN-05 stays sealed: unseen by the DQN, unseen by the forecaster, and never used for
+# early stopping or for the freeze gate.
 SPLITS: dict[str, tuple[str, ...]] = {
-    "train": ("SCN-01", "SCN-02", "SCN-03"),
+    "train": ("SCN-01", "SCN-02", "SCN-03", "SCN-10"),
     "val": ("SCN-04",),
     "test": ("SCN-05",),
 }
