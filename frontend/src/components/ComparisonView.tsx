@@ -11,10 +11,19 @@ function formatKpi(key: string, value: number | null): string {
 }
 
 /** Best value per KPI column, respecting lower_is_better. A column with no numeric rows has no best. */
+/**
+ * Best value per KPI, computed over the CAMPAIGN rows only.
+ *
+ * User-trained models are excluded from winning a column. They are evaluated on different code
+ * and usually on far fewer seeds, so a model trained for thirty seconds can top a column against
+ * a 900-episode campaign purely by variance - which reads as a result and is not one. They are
+ * still shown, and still comparable by eye; they just cannot be crowned.
+ */
 function bestValues(rows: ComparisonRow[], kpis: ComparisonKpi[]): Record<string, number> {
   const best: Record<string, number> = {};
+  const campaignRows = rows.filter((r) => !r.is_user_model);
   for (const kpi of kpis) {
-    const values = rows
+    const values = campaignRows
       .map((r) => (r as unknown as Record<string, unknown>)[kpi.key])
       .filter((v): v is number => typeof v === "number");
     if (values.length === 0) continue;
@@ -116,7 +125,7 @@ export function ComparisonView() {
                   {data.kpis.map((k) => {
                     const value = (row as unknown as Record<string, unknown>)[k.key];
                     const numeric = typeof value === "number" ? value : null;
-                    const isBest = numeric != null && numeric === best[k.key];
+                    const isBest = !row.is_user_model && numeric != null && numeric === best[k.key];
                     return (
                       <td key={k.key} className={"numeric-cell" + (isBest ? " best-cell" : "")}>
                         {formatKpi(k.key, numeric)}
