@@ -25,6 +25,11 @@ const POLL_MS = 2000;
 const MAX_EPISODES = 300;
 // Used only until GET /controllers answers; the hub owns the real list.
 const FALLBACK_EVAL_SCENARIOS = ["SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"];
+
+/** The scenario whose demand comes from real measured counts in the database, not a formula. */
+const MEASURED_SCENARIO = "SCN-R1";
+
+type Demand = "synthetic" | "measured";
 const MAX_EVAL_SEEDS = 15;
 
 type SocketState = "connecting" | "open" | "closed";
@@ -56,6 +61,7 @@ export function TrainingPanel() {
   // server is down - the one state a demo most needs to see.
   const [hubError, setHubError] = useState<string | null>(null);
   const [evalScenarios, setEvalScenarios] = useState<string[]>(FALLBACK_EVAL_SCENARIOS);
+  const [demand, setDemand] = useState<Demand>("synthetic");
 
   // Mutated only from effect/socket callbacks (never during render) so the poll fallback below
   // can check "is the socket open right now" without forcing a re-render on every ws state flip.
@@ -268,6 +274,7 @@ export function TrainingPanel() {
         episodes,
         episode_length_s: null,
         label: label.trim() ? label.trim() : null,
+        train_scenarios: demand === "measured" ? [MEASURED_SCENARIO] : null,
       });
       setStatus(s);
     } catch (e) {
@@ -363,10 +370,33 @@ export function TrainingPanel() {
           />
         </label>
         <label>
+          training demand
+          <select
+            value={demand}
+            onChange={(e) => setDemand(e.target.value as Demand)}
+            disabled={running}
+          >
+            <option value="synthetic">synthetic scenarios (SCN-01/02/03)</option>
+            <option value="measured">real measured - Hangzhou ({MEASURED_SCENARIO})</option>
+          </select>
+        </label>
+        <label>
           label (optional)
           <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} disabled={running} />
         </label>
         <p className="control-note">30 episodes is a quick demo run; 300 episodes is a full run (~13 min).</p>
+        {demand === "measured" ? (
+          <p className="control-note">
+            The arrival pattern comes from real measured traffic counts stored in the database;
+            the agent learns by controlling it. A demonstration, not part of the pre-registered
+            campaign - {MEASURED_SCENARIO} is deliberately outside the confirmatory set.
+          </p>
+        ) : (
+          <p className="control-note">
+            Demand is generated from the scenario's formula. Switch to measured to train against
+            real recorded traffic instead.
+          </p>
+        )}
         <div className="control-buttons">
           <button onClick={handleStart} disabled={busy || running}>
             start training
@@ -397,6 +427,14 @@ export function TrainingPanel() {
                 <dd>{status.label}</dd>
               </>
             )}
+            {/* Read off the job, not off the label - so "trained on real data" is a fact the
+                hub reports rather than something a demonstrator typed into a free-text box. */}
+            <dt>training demand</dt>
+            <dd>
+              {status.train_scenarios
+                ? `measured - ${status.train_scenarios.join(", ")}`
+                : "synthetic (default rotation)"}
+            </dd>
             <dt>run_dir</dt>
             <dd>{status.run_dir}</dd>
             {status.error && (

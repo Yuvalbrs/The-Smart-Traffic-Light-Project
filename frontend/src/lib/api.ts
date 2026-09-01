@@ -101,6 +101,8 @@ export interface StartTrainingBody {
   episodes: number;
   episode_length_s: number | null;
   label: string | null;
+  /** Scenarios whose demand drives training; null keeps the hub's default rotation. */
+  train_scenarios: string[] | null;
 }
 
 export interface TrainingCurvePoint {
@@ -116,6 +118,7 @@ export interface TrainingStatus {
   seed: number;
   episodes: number;
   label: string | null;
+  train_scenarios: string[] | null;
   episodes_done: number;
   pct: number;
   curve: TrainingCurvePoint[];

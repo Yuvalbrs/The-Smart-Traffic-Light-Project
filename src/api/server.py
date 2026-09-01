@@ -103,6 +103,15 @@ class StartTraining(BaseModel):
         None, ge=60, le=3600, description="shorten each episode for a faster demo run"
     )
     label: str | None = Field(None, max_length=80, description="free-text label for this run")
+    train_scenarios: list[str] | None = Field(
+        None,
+        min_length=1,
+        max_length=len(SCENARIOS),
+        description=(
+            "scenarios whose demand drives training; None keeps train_dqn's default rotation "
+            "(SCN-01/02/03). Pass ['SCN-R1'] to train against real measured Hangzhou counts."
+        ),
+    )
 
 
 class StartEvaluation(BaseModel):
@@ -281,6 +290,11 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                 status_code=422,
                 detail=f"unknown variant {body.variant}; expected one of {list(VARIANTS)}",
             )
+        for scn in body.train_scenarios or ():
+            if scn not in SCENARIOS:
+                raise HTTPException(
+                    status_code=422, detail=f"unknown training scenario {scn}"
+                )
         try:
             status = app.state.training.start(
                 variant=body.variant,
@@ -288,6 +302,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                 episodes=body.episodes,
                 episode_length_s=body.episode_length_s,
                 label=body.label,
+                train_scenarios=tuple(body.train_scenarios) if body.train_scenarios else None,
             )
         except TrainingBusyError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

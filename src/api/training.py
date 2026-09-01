@@ -73,6 +73,10 @@ class TrainingStatus:
     episodes: int
     label: str | None
     run_dir: str
+    #: Scenarios whose demand drove this run; None means train_dqn's own default rotation.
+    #: Reported so "this model was trained on real measured traffic" is a fact the UI reads
+    #: back off the job rather than a claim someone types into the label.
+    train_scenarios: list[str] | None = None
     status: str = "running"  # running | done | failed | cancelled
     episodes_done: int = 0
     started_at: str = field(default_factory=_now)
@@ -92,6 +96,7 @@ class TrainingStatus:
             "seed": self.seed,
             "episodes": self.episodes,
             "label": self.label,
+            "train_scenarios": list(self.train_scenarios) if self.train_scenarios else None,
             "episodes_done": self.episodes_done,
             "pct": self.pct,
             "curve": list(self.curve),
@@ -106,13 +111,20 @@ class TrainingStatus:
 
 
 def _build_command(variant: str, seed: int, episodes: int, episode_length_s: int | None,
-                   run_dir: Path) -> list[str]:
+                   run_dir: Path, train_scenarios: tuple[str, ...] | None = None) -> list[str]:
     """The ``train_dqn`` invocation for one variant.
 
     The variant flags mirror ``scripts/train_dqn.py``'s own argument handling exactly. ``hybrid``
     resolves the checkpoint through ``official_lstm_checked(seed)`` - the guarded, per-seed
     accessor (A6.4) - so a UI run cannot quietly train against a stale pin or another seed's
     forecaster the way a hard-coded path would.
+
+    ``train_scenarios`` names the scenarios whose demand drives the episodes. ``train_dqn`` has
+    accepted ``--train-scenarios`` all along; this builder simply never passed it, so every in-app
+    run was pinned to the default SCN-01/02/03 rotation and the measured-demand scenario the
+    ingest pipeline produces (SCN-R1) could not be reached from the application at all. ``None``
+    keeps train_dqn's own default rather than restating it here - two copies of a default is how
+    they drift.
     """
     cmd = [
         sys.executable, "-u", "-m", "scripts.train_dqn",
@@ -128,6 +140,8 @@ def _build_command(variant: str, seed: int, episodes: int, episode_length_s: int
     ]
     if episode_length_s:
         cmd += ["--episode-length", str(episode_length_s)]
+    if train_scenarios:
+        cmd += ["--train-scenarios", *train_scenarios]
     if variant == "hybrid":
         from src.provenance.official import official_lstm_checked
 
@@ -243,7 +257,8 @@ class TrainingManager:
         return self._job is not None and self._job.running
 
     def start(self, *, variant: str, seed: int, episodes: int,
-              episode_length_s: int | None = None, label: str | None = None) -> TrainingStatus:
+              episode_length_s: int | None = None, label: str | None = None,
+              train_scenarios: tuple[str, ...] | None = None) -> TrainingStatus:
         """Launch one job. Raises :class:`TrainingBusyError` if one is already running."""
         if variant not in VARIANTS:
             raise ValueError(f"unknown variant {variant!r}; expected one of {list(VARIANTS)}")
@@ -259,7 +274,7 @@ class TrainingManager:
             job_id = f"t-{self._counter}"
 
         run_dir = self._runs_dir / f"ui_{variant}_seed{seed}_{job_id}"
-        cmd = _build_command(variant, seed, episodes, episode_length_s, run_dir)
+        cmd = _build_command(variant, seed, episodes, episode_length_s, run_dir, train_scenarios)
 
         env = dict(os.environ)
         env["LIBSUMO_AS_TRACI"] = "1"  # the training backend, as in every other entry point
@@ -273,6 +288,7 @@ class TrainingManager:
             job_id=job_id, variant=variant, seed=seed, episodes=episodes, label=label,
             run_dir=str(run_dir.relative_to(_REPO_ROOT)) if run_dir.is_relative_to(_REPO_ROOT)
             else str(run_dir),
+            train_scenarios=list(train_scenarios) if train_scenarios else None,
         )
         with self._lock:
             self._job = TrainingJob(status, proc, self._hub)
