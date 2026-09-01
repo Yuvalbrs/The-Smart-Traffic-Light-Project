@@ -225,3 +225,37 @@ def test_path_traversal_over_http_is_a_422(client) -> None:
 
 def test_health_reports_the_evaluation_channel(client) -> None:
     assert "evaluation" in client.get("/health").json()["channels"]
+
+
+# ------------------------------------------------------------------------------------------
+# The demo's scene list and the experiment's scene list are NOT the same list
+# ------------------------------------------------------------------------------------------
+
+
+def test_the_confirmatory_set_is_exactly_the_five_preregistered_scenarios() -> None:
+    """Widening what the DEMO may show must never widen what the EXPERIMENT measures.
+
+    The live hub offers every single-intersection scenario so the app can demonstrate the full
+    range. `CONFIRMATORY_SCENARIOS` is a different thing: the set the pre-registration pins, and
+    adding to it after the fact would turn a pre-registered result into a post-hoc one. The two
+    lists sit in different modules for exactly this reason; this test is what stops a future
+    "make them consistent" refactor from quietly merging them.
+    """
+    from scripts.eval_runner import CONFIRMATORY_SCENARIOS
+    from src.api.server import SCENARIOS
+
+    assert set(CONFIRMATORY_SCENARIOS) == {"SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05"}
+    assert set(CONFIRMATORY_SCENARIOS) < set(SCENARIOS), "the demo must be a superset, not equal"
+
+
+def test_every_offered_scene_is_single_intersection_and_loadable() -> None:
+    """A scene the hub offers but the network cannot build is a 422 waiting to happen on stage."""
+    from src.scenarios.config import load_all
+    from src.api.server import SCENARIOS
+
+    by_id = {s.id: s for s in load_all()}
+    for scenario_id in SCENARIOS:
+        assert scenario_id in by_id, f"{scenario_id} is offered but has no config file"
+        assert not by_id[scenario_id].is_arterial, (
+            f"{scenario_id} is arterial - it needs the two-junction network this hub does not build"
+        )

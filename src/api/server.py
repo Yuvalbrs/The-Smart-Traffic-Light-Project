@@ -58,7 +58,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DB_PATH = _REPO_ROOT / "data" / "traffic.db"
 _TRACE_DIRS = [_REPO_ROOT / "data" / "live", _REPO_ROOT / "data" / "eval"]
 
-SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")
+# Every single-intersection scenario, not just the five the experiment measures. These are two
+# different lists for two different jobs: this one is what the live demo may SHOW, while
+# scripts/eval_runner.py::CONFIRMATORY_SCENARIOS is what the experiment may MEASURE and is pinned
+# by the pre-registration - widening that one would corrupt a pre-registered result, so it stays at
+# five. SCN-A1..A4 are excluded because they need the two-junction arterial network this hub does
+# not build; `load_all()` reports is_arterial=True for exactly those four.
+SCENARIOS = (
+    "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
+    "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
+)
 
 
 class StartSession(BaseModel):

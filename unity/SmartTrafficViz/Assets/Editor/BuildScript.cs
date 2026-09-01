@@ -26,6 +26,9 @@ namespace SmartTrafficViz.EditorTools
 {
     public static class BuildScript
     {
+        /// <summary>Must match <c>IntersectionScene.PinnedMaterial</c>, which loads it by name.</summary>
+        private const string PinnedMaterialName = "ScenePinMaterial";
+
         private const string SceneDir = "Assets/Scenes";
         private const string ScenePath = SceneDir + "/Main.unity";
 
@@ -51,8 +54,45 @@ namespace SmartTrafficViz.EditorTools
             return ScenePath;
         }
 
+        /// <summary>Create the Resources material that pins a real shader into the player build.
+        ///
+        /// This project authors no materials - every mesh is generated at runtime and painted with
+        /// `new Material(Shader.Find(...))`. That works in the Editor, where every built-in shader
+        /// is loaded, and FAILS in a build, which only ships shaders some asset references. The
+        /// first standalone build proved it: `ArgumentNullException: Parameter name: shader` inside
+        /// IntersectionScene.Paint, so the whole 3-D scene never built.
+        ///
+        /// One material asset under Resources/ is the fix: Resources content is always included,
+        /// so the shader it points at is too. Created here rather than committed as hand-written
+        /// YAML so the shader reference is resolved by Unity itself and cannot rot.</summary>
+        private static void EnsureShaderPin()
+        {
+            const string dir = "Assets/Resources";
+            const string path = dir + "/" + PinnedMaterialName + ".mat";
+
+            if (File.Exists(path))
+            {
+                Debug.Log($"[build] shader pin already present: {path}");
+                return;
+            }
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            if (shader == null)
+            {
+                Debug.LogError("[build] no Lit/Standard shader in the Editor either - cannot pin one.");
+                return;
+            }
+
+            AssetDatabase.CreateAsset(new Material(shader), path);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log($"[build] created shader pin {path} using '{shader.name}'");
+        }
+
         public static void BuildWindows()
         {
+            EnsureShaderPin();
             var scenePath = EnsureBootScene();
             var projectRoot = Directory.GetParent(Application.dataPath)!.FullName;
             var outputDir = Path.Combine(projectRoot, "Build");

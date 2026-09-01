@@ -147,6 +147,19 @@ namespace SmartTraffic
             // The channel's first message is a {"type":"hello"} envelope with no payload.
             if (frame == null || frame.RunningKpis == null) return;
 
+            // One line, once, on the first successfully parsed frame. This is the only evidence
+            // available that Newtonsoft's reflection into DashboardFrame survived the build: if
+            // managed stripping ever removes it the fields come back as zeros with no exception,
+            // which on screen is indistinguishable from a network fault. The player log makes that
+            // failure visible without anyone having to squint at the UI.
+            if (Received == 0)
+            {
+                UnityEngine.Debug.Log(
+                    $"[dashboard-feed] first frame parsed OK: sim_time={frame.SimTime} " +
+                    $"phase={frame.CurrentPhase} queues={(frame.QueueLengths == null ? -1 : frame.QueueLengths.Count)} " +
+                    $"avg_wait={frame.RunningKpis.AvgWaitSoFar}");
+            }
+
             _frames.Enqueue(frame);
             Received++;
             while (_frames.Count > MaxQueued && _frames.TryDequeue(out _)) Dropped++;

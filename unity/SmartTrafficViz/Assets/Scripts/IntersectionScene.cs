@@ -54,12 +54,51 @@ namespace SmartTraffic
 
         private static Shader _shader;
 
-        internal static Shader LitShader =>
-            _shader != null
-                ? _shader
-                // Shader.Find at runtime rather than a serialised material: keeps the project free
-                // of .mat assets and works under whichever pipeline the editor is set to.
-                : _shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        /// <summary>Name of the material asset in Resources/ that pins a shader into the build.</summary>
+        internal const string PinnedMaterial = "ScenePinMaterial";
+
+        private static bool _shaderResolved;
+
+        internal static Shader LitShader
+        {
+            get
+            {
+                if (_shaderResolved) return _shader;
+                _shaderResolved = true;
+                return _shader = ResolveShader();
+            }
+        }
+
+        /// <summary>Find a usable shader, or null if the build genuinely has none.
+        ///
+        /// Resources FIRST, and that ordering is the whole point. `Shader.Find` alone returns null
+        /// in a player build for any shader no asset references - the Editor has every built-in
+        /// shader loaded, a build only ships what something points at. That is not hypothetical
+        /// here: the first standalone build threw `ArgumentNullException: Parameter name: shader`
+        /// on the very first Paint call, so BuildStatic never finished, the 3-D scene was never
+        /// created, and Update then NREd on the null socket every frame - 185 MB of log in an hour.
+        /// A material asset under Resources/ is what actually pins the shader in; the Find calls
+        /// below are the fallback, not the mechanism.</summary>
+        private static Shader ResolveShader()
+        {
+            var pinned = Resources.Load<Material>(PinnedMaterial);
+            if (pinned != null && pinned.shader != null) return pinned.shader;
+
+            foreach (var name in new[]
+                     {
+                         "Universal Render Pipeline/Lit", "Standard",
+                         "Legacy Shaders/Diffuse", "Sprites/Default",
+                     })
+            {
+                var found = Shader.Find(name);
+                if (found != null) return found;
+            }
+
+            Debug.LogError(
+                "[scene] no usable shader in this build - geometry will render with default " +
+                "materials. Expected Resources/" + PinnedMaterial + " to pin one.");
+            return null;
+        }
 
         public static Color ColorFor(string name)
         {
@@ -423,6 +462,9 @@ namespace SmartTraffic
         /// </summary>
         public static void Paint(GameObject go, Color color)
         {
+            // A null shader means this build shipped none. Leaving the default material is ugly;
+            // `new Material(null)` throws and takes the entire scene build down with it.
+            if (LitShader == null) return;
             // `mat == null` also catches a Material destroyed when Play mode last exited: the
             // dictionary is static and survives that, so a stale entry would otherwise be handed
             // out on the next Play whenever domain reload is turned off.

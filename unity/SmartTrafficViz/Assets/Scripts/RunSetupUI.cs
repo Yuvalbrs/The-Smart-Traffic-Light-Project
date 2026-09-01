@@ -21,7 +21,13 @@ namespace SmartTraffic
             public Scene(string id, string name, string blurb) { Id = id; Name = name; Blurb = blurb; }
         }
 
-        /// <summary>Mirrors config/scenarios/scn_0*.yaml.</summary>
+        /// <summary>Mirrors config/scenarios/scn_*.yaml and SCENARIOS in src/api/server.py.
+        ///
+        /// Hand-synced, and therefore able to drift: the hub already returns both this list and
+        /// the controller list from GET /controllers, so fetching them at startup would remove
+        /// the duplication entirely. Not done before the deadline because it changes the startup
+        /// path of the screen the whole demo runs through; recorded as the obvious next cleanup.
+        /// Only SCN-A1..A4 are deliberately absent - they need the two-junction network.</summary>
         public static readonly Scene[] Scenes =
         {
             new Scene("SCN-01", "Uniform light", "Low, symmetric demand. The easy regime."),
@@ -29,6 +35,11 @@ namespace SmartTraffic
             new Scene("SCN-03", "Rush hour peak", "N/S peak decays as E/W builds."),
             new Scene("SCN-04", "Asymmetric", "Heavy N/S, light E/W. Starvation probe."),
             new Scene("SCN-05", "Shifting demand", "Both axes oscillate, 90 deg out of phase."),
+            new Scene("SCN-06", "Near-saturation shifting", "Busy but feasible, 90 deg out of phase."),
+            new Scene("SCN-07", "Imbalanced near-saturation", "Heavy N/S 800, light E/W 200."),
+            new Scene("SCN-08", "Fast-shifting", "Anti-phase, 300 s period; split swings 100..600."),
+            new Scene("SCN-09", "Moderate fast-shifting", "Anti-phase, 300 s period, 200..500/axis."),
+            new Scene("SCN-10", "Fast-shifting (training)", "Anti-phase, 240 s period, 120..560/axis."),
         };
 
         /// <summary>Mirrors CONTROLLERS in src/api/live.py.</summary>

@@ -67,7 +67,9 @@ namespace SmartTraffic
 
             // A fixed palette shared by sharedMaterial, not one material per car: cars are pooled
             // and recycled, so per-instance materials would leak a new one on every spawn.
-            var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            // One resolution path for the whole app (IntersectionScene.ResolveShader) - a second
+            // copy of Shader.Find here is a second thing to fix when a build ships no shader.
+            var shader = IntersectionScene.LitShader;
             var palette = new[]
             {
                 new Color(0.87f, 0.88f, 0.90f), new Color(0.15f, 0.17f, 0.20f),
@@ -76,8 +78,14 @@ namespace SmartTraffic
                 new Color(0.55f, 0.57f, 0.62f),
             };
             _paints = new Material[palette.Length];
-            for (var i = 0; i < palette.Length; i++) _paints[i] = new Material(shader) { color = palette[i] };
-            _glass = new Material(shader) { color = new Color(0.10f, 0.14f, 0.18f) };
+            if (shader != null)
+            {
+                for (var i = 0; i < palette.Length; i++)
+                {
+                    _paints[i] = new Material(shader) { color = palette[i] };
+                }
+                _glass = new Material(shader) { color = new Color(0.10f, 0.14f, 0.18f) };
+            }
 
             EnsureCamera();
             EnsureLight();
@@ -91,6 +99,11 @@ namespace SmartTraffic
         {
             // Drain everything queued this tick: only the newest frame defines the target, but
             // each one must be consumed or the bounded queue would just refill.
+            // Start() may have failed before the socket existed. Without this guard that costs one
+            // NullReferenceException PER FRAME, forever - the symptom that buried the real error
+            // under 66,000 identical stack traces in the player log.
+            if (_socket == null) return;
+
             while (_socket.TryDequeue(out var frame)) Apply(frame);
 
             if (_latest == null) return;
