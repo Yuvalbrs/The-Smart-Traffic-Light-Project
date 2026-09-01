@@ -14,6 +14,17 @@ export function MovementBars({ queueLengths, pressures }: Props) {
     pressure: pressures?.[i] ?? 0,
   }));
 
+  // No frame yet means every bar is a coerced 0, which draws an empty plot indistinguishable
+  // from a live session that genuinely has no queues. Say which it is, as KpiCharts does.
+  if (queueLengths == null && pressures == null) {
+    return (
+      <div className="panel movement-bars">
+        <h2>Per-movement queues &amp; pressure</h2>
+        <p className="control-note">no live frame yet - start a session to see per-movement state</p>
+      </div>
+    );
+  }
+
   return (
     <div className="panel movement-bars">
       <h2>Per-movement queues &amp; pressure</h2>

@@ -73,7 +73,12 @@ export function ComparisonView() {
         if (!cancelled) setData(res);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof ApiError ? e.detail : String(e));
+        if (cancelled) return;
+        setError(e instanceof ApiError ? e.detail : String(e));
+        // Drop the previous scenario's rows. Leaving them up printed SCN-05's table and charts
+        // under a "no episodes recorded for SCN-08" message, with nothing on the numbers saying
+        // which scenario they belonged to - one scenario's results read as another's.
+        setData(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -195,7 +200,14 @@ export function ComparisonView() {
                         formatKpi(kpi.key, typeof value === "number" ? value : null)
                       }
                     />
-                    <Bar dataKey="value" name={kpi.title} fill={kpi.fill} />
+                    {/* isAnimationActive=false is load-bearing here for the same reason it is in
+                        MovementBars: with recharts 3 these bars mount inside a ResponsiveContainer
+                        that sizes after the first paint, the entry animation never runs, and the
+                        <Bar> layer renders ZERO rects - axes, gridlines and category labels all
+                        present, plot area empty. The y-axis still scales to the real data, so the
+                        chart looks deliberate rather than broken. These two charts ARE the
+                        "why ours is best" visual, and they were blank. */}
+                    <Bar dataKey="value" name={kpi.title} fill={kpi.fill} isAnimationActive={false} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
