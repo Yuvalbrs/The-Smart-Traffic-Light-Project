@@ -7,24 +7,56 @@ non-RL baselines (Webster fixed-time, max-pressure, SUMO actuated) under a multi
 
 Positioned as **replication-plus-adaptation** of MPLight (Chen et al., 2020) — not novel research.
 
-> **The blueprint/spec is NOT in this repo.** It lives in the Obsidian vault (the single source of
-> truth). See [`docs/README.md`](docs/README.md) for where to find it. Code conforms to the spec.
+> **Design docs live in an Obsidian vault** (the authoring source of truth); see
+> [`docs/README.md`](docs/README.md). Everything the code *reads at runtime* ships here —
+> `config/movements.yaml` is the movement/phase spec, and a clone is self-contained.
+
+## Run it
+
+```bash
+run_app.bat            # builds the UI if needed, starts the hub, opens the dashboard
+```
+
+Then open the **Live** tab and press *start session*. Three tabs: **Live** (watch an episode
+stream at 1 Hz), **Train** (train a controller and watch its reward curve), **Compare**
+(every controller's KPIs on shared seeds). A Unity 3-D client renders the same live episode —
+see [`unity/README.md`](unity/README.md).
+
+Prerequisites: Python 3.11+, SUMO 1.20+ with `SUMO_HOME` set, Node.js, and `torch`
+(installed separately — see [Setup](#setup)). Without the trained checkpoints (gitignored, see
+below) the three **baseline** controllers still run; the DQN controllers need either the
+checkpoint download or a training run from the Train tab.
 
 ## Status
 
-**Implementation complete; results are being re-run.** The simulator, the DQN training stack,
-the evaluation campaign, the FastAPI hub, the React dashboard and the Unity 3-D client are all
-built and tested (295 tests). What is *not* current is the numbers.
+**Complete.** Simulator, DQN training stack, frozen-LSTM forecaster, three baselines, evaluation
+campaign, statistical analysis, FastAPI hub, React dashboard and Unity 3-D client are all built
+and tested (**390 tests**).
 
-On 2026-08-28 a 3-D rendering of the simulation exposed a right-of-way defect. Pulling that
-thread uncovered four independent modelling defects plus a safety bound that was specified but
-never enforced — each invisible to the test suite, and together enough to invalidate every
-result the project had produced. All are fixed and regression-tested; the training matrix,
-evaluation campaign and statistical analysis are being re-run on the corrected environment.
+### Results
 
-Do not cite any number from `data/eval/` or the analysis notebook until that re-run lands. The
-full account, with evidence and the remaining work, is in the vault's `decisions.md` (entries
-dated 2026-08-28) and `hot.md`.
+The confirmatory campaign is **900 episodes** — 5 scenarios x 15 held-out seeds x 12 controllers —
+analysed exactly as pre-registered (paired Wilcoxon signed-rank, Holm-Bonferroni within families).
+On the test scenario SCN-05, average waiting time:
+
+| comparison | effect | Holm p | |
+|---|---|---|---|
+| vs Webster fixed-time | **-15.6 s (-44%)** | 0.0013 | RL wins |
+| vs SUMO actuated | **-4.3 s (-17%)** | 0.0013 | RL wins |
+| vs max-pressure | +2.0 s | 0.0013 | RL loses |
+
+Gridlock is **0%** across all five scenarios.
+
+**The headline hypothesis was refuted, and that is the finding.** H2 asked whether adding the
+frozen LSTM forecast to the agent's state improves it. Pre-registered before any of this data
+existed, the answer is that it makes the agent significantly *worse* (avg wait +0.62 s, p=0.004;
+p95 wait +2.0 s, p=0.041). H3's control settles why: a **random** forecast beats the real one,
+so the loss is attributable to the forecast information itself rather than the extra input
+capacity — which matches the forecaster's own standalone skill of **-0.31** at the 90 s horizon
+(worse than assuming queues do not change).
+
+Everything above is reproducible from `data/eval/analysis/`. The pre-registration, its six dated
+amendments, and the full defect history are in the vault's `preregistration.md` and `decisions.md`.
 
 ## Layout
 
@@ -48,8 +80,20 @@ tests/           295 tests
 ## Requirements
 
 - **Python 3.11+**
-- **SUMO 1.20+** with `SUMO_HOME` set and `sumo`/`sumo-gui` on `PATH`
+- **SUMO 1.20+** with `SUMO_HOME` set and `sumo`/`sumo-gui`/`netconvert` on `PATH`
   (verified locally: SUMO 1.27.0, `SUMO_HOME=C:\Program Files (x86)\Eclipse\Sumo`).
+  A native install, not a pip package: `netconvert` runs on every session start and has no
+  wheel. `pip install libsumo` alone is not enough.
+- **Node.js 18+** — the dashboard is built from source; `frontend/dist/` is not committed.
+- **torch** — deliberately absent from `requirements.txt` so the CPU/CUDA choice stays yours.
+  See [GPU / torch](#gpu--torch-do-this-deliberately-later). Required by every DQN controller.
+
+### What a fresh clone does *not* include
+
+`checkpoints/`, `runs/`, `data/traffic.db` and `data/lstm/` are gitignored — they are large and
+reproducible. So a clone runs the **three baselines** immediately, and for the DQN controllers you
+either train one from the Train tab or fetch the checkpoint bundle from the GitHub release. The
+Compare tab needs `data/traffic.db`; without it, it says so rather than showing an empty table.
 
 ## Setup
 
