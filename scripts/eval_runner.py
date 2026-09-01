@@ -49,7 +49,7 @@ from src.env.sumo_env import SUMOEnv
 from src.metrics.kpi_extractor import EpisodeKPIs, extract_kpis
 from src.ml.dqn import OBS_DIM, DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster, random_forecaster
-from src.provenance.official import OFFICIAL_LSTM, assert_official_matches_corpus
+from src.provenance.official import OFFICIAL_LSTM, official_lstm_checked
 from src.provenance.records import record_experiment_run
 from src.provenance.versions import git_sha, sumo_version
 from src.scenarios.config import SCENARIO_DIR, Scenario, load_all, load_scenario
@@ -121,13 +121,12 @@ def _dqn_algos() -> list[Algo]:
             if variant == "plain":
                 forecaster, lstm_version = None, None
             elif variant == "hybrid":
-                assert_official_matches_corpus()  # a stale pin must stop the run, not poison provenance
-                forecaster, lstm_version = load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
+                forecaster, lstm_version = load_forecaster(str(official_lstm_checked())), _OFFICIAL_LSTM.name
             else:  # random-lstm: re-create the SAME frozen control used in training
                 # seed-matched AND stats-matched: both must mirror train_matrix._forecaster_for
                 # exactly, or the agent is evaluated on inputs it never saw.
                 forecaster, lstm_version = (
-                    random_forecaster(seed=seed, stats_from=load_forecaster(str(_OFFICIAL_LSTM))),
+                    random_forecaster(seed=seed, stats_from=load_forecaster(str(official_lstm_checked()))),
                     "random-lstm",
                 )
             algos.append(Algo(

@@ -27,7 +27,7 @@ from src.env.intersection import N_MOVEMENTS
 from src.ml.dqn import DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster
 
-from src.provenance.official import OFFICIAL_LSTM  # noqa: E402
+from src.provenance.official import OFFICIAL_LSTM, official_lstm_checked  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OUT_DIR = _REPO_ROOT / "data" / "lstm_dqn"
@@ -84,7 +84,7 @@ def main() -> None:
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     build_net()
     agent = _load_hybrid_agent()
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    forecaster = load_forecaster(str(official_lstm_checked()))
     total = 0
     for scenario_id in SCENARIOS:
         for seed in SEEDS:

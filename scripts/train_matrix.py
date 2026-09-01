@@ -35,7 +35,7 @@ from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
 from src.provenance.official import (
     OFFICIAL_LSTM,
-    assert_official_matches_corpus,
+    official_lstm_checked,
     official_lstm_version,
 )
 from src.provenance.versions import git_sha
@@ -57,12 +57,11 @@ def _forecaster_for(variant: str, seed: int):
             "(regenerate via scripts/train_lstm.py - it is gitignored)."
         )
     if variant == "hybrid":
-        assert_official_matches_corpus()  # stale pin -> stop, do not record a false data_version
-        return load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
+        return load_forecaster(str(official_lstm_checked())), _OFFICIAL_LSTM.name
     if variant == "random-lstm":
         # scale-matched to the deployed forecaster: without its input stats the control
         # arm's forecast dims arrive in raw vehicle units (see random_forecaster docstring)
-        official = load_forecaster(str(_OFFICIAL_LSTM))
+        official = load_forecaster(str(official_lstm_checked()))
         return random_forecaster(seed=seed, stats_from=official), "random-lstm"
     raise ValueError(f"unknown variant {variant!r}")
 

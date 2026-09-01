@@ -44,7 +44,7 @@ from scripts.env_factory import build_env, load_scenario_by_id
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
-from src.provenance.official import OFFICIAL_LSTM
+from src.provenance.official import OFFICIAL_LSTM, official_lstm_checked
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -135,7 +135,7 @@ def main() -> None:
         # eval_runner.py do - otherwise this path trains on raw-unit inputs and eval
         # rebuilds the control standardized, a mismatch neither side would report.
         forecaster, fc_label = (
-            random_forecaster(seed=args.seed, stats_from=load_forecaster(str(OFFICIAL_LSTM))),
+            random_forecaster(seed=args.seed, stats_from=load_forecaster(str(official_lstm_checked()))),
             "random-lstm",
         )
     elif args.forecast_ckpt:

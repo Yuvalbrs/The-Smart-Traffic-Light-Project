@@ -323,6 +323,7 @@ class LiveSession:
             )
         else:  # dqn-hybrid
             from scripts.eval_runner import _OFFICIAL_LSTM, load_forecaster
+            from src.provenance.official import official_lstm_checked
             from src.ml.hybrid_wrapper import HYBRID_OBS_DIM
 
             ckpt = _REPO_ROOT / "runs" / "hybrid_seed42" / "checkpoints" / "ep299.pt"
@@ -330,7 +331,7 @@ class LiveSession:
                 self.controller,
                 "dqn",
                 agent=_load_agent(ckpt, HYBRID_OBS_DIM),
-                forecaster=load_forecaster(str(_OFFICIAL_LSTM)),
+                forecaster=load_forecaster(str(official_lstm_checked())),
                 variant="hybrid",
                 train_seed=42,
                 lstm_version=_OFFICIAL_LSTM.name,

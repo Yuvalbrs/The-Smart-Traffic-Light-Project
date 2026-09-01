@@ -21,6 +21,7 @@ import numpy as np
 from scripts.build_actuated import build_actuated_add
 from scripts.build_network import build_net
 from scripts.eval_runner import _OFFICIAL_LSTM, Algo, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.baselines.max_pressure import MaxPressureController  # noqa: F401 (kept for parity)
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import load_forecaster
@@ -55,7 +56,7 @@ def main() -> None:
 
     plain = _load_agent(_RUNS / "plain_seed123" / "checkpoints" / "ep299.pt", 20)
     hybrid = _load_agent(_RUNS / "hybrid_seed123" / "checkpoints" / "ep299.pt", 56)
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    forecaster = load_forecaster(str(official_lstm_checked()))
 
     print(f"{'candidate':16}  webster  actuated  dqn-plain  dqn-hybrid   (gridlock-censor % over 6 seeds)")
     print("-" * 86)

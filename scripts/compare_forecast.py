@@ -22,6 +22,7 @@ import numpy as np
 from scripts.build_actuated import build_actuated_add
 from scripts.build_network import build_net
 from scripts.eval_runner import Algo, _OFFICIAL_LSTM, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster
 from src.scenarios.config import SCENARIO_DIR, load_scenario
@@ -53,7 +54,7 @@ def main() -> None:
     plain = {s: _load_agent(_RUNS / f"plain_seed{s}" / "checkpoints" / "ep299.pt", 20) for s in SEEDS}
     hybrid = {s: _load_agent(_RUNS / f"hybrid_seed{s}" / "checkpoints" / "ep299.pt", HYBRID_OBS_DIM)
               for s in SEEDS}
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    forecaster = load_forecaster(str(official_lstm_checked()))
 
     for scn_id in args.scenarios:
         scn = load_scenario(SCENARIO_DIR / f"scn_{scn_id.split('-')[1]}.yaml")

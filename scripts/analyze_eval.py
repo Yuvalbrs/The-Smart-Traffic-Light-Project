@@ -493,6 +493,12 @@ def main() -> None:
              "Holm family, with m reduced and stated.",
              "",
              f"_Eval seeds present for SCN-05: {len(es05)} (A1.3 locks 15: 7000-7014)._",
+             *(["", "> **THIS REPORT IS NOT REPORTABLE.** The input carries "
+                 f"{len(es05)} eval seeds; amendment A1.3 requires 15. Below that floor no "
+                 "confirmatory test can reject at alpha=0.05 for ANY data, so every result "
+                 "here is UNDECIDABLE by construction. Re-run the campaign "
+                 "(`scripts.eval_runner`) before citing anything in this file."]
+               if len(es05) < 15 else []),
              "",
              "## Confirmatory families - SCN-05 (designated test scenario)"]
 

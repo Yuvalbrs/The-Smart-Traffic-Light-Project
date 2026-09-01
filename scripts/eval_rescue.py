@@ -26,6 +26,7 @@ import numpy as np
 from scripts.analyze_eval import _wilcoxon
 from scripts.build_network import build_net
 from scripts.eval_runner import _OFFICIAL_LSTM, Algo, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.ml.hybrid_wrapper import load_forecaster
 from src.scenarios.config import SCENARIO_DIR, load_scenario
 
@@ -46,7 +47,7 @@ VARIANTS = {
 
 def _forecaster(kind):
     if kind == "official":
-        return load_forecaster(str(_OFFICIAL_LSTM))
+        return load_forecaster(str(official_lstm_checked()))
     if kind == "boot":
         return load_forecaster(str(_BOOT_LSTM))
     return None

@@ -272,17 +272,75 @@ def test_a4_mutual_failure_is_still_an_exact_tie():
     assert (a - b)[3] == 0.0 and meta["imputed"] == 2
 
 
-def test_a4_holm_family_size_is_not_shrunk_by_undecidable_tests():
-    """A3 reduced m by the undecidable count; A4 retires that.
+def _full_kpi_rows(n_eval_seeds, *, blank_kpi=None, blank_after=None):
+    """Fixture carrying ALL 7 locked KPIs, so a single KPI can be made undecidable in isolation."""
+    from scripts.analyze_eval import KPIS
 
-    n depends on the data (censoring, missingness), so an m that follows it is the data-dependent
-    m that ``_holm``'s own docstring warns against - it weakens the correction exactly when the
-    evidence is already degraded. Pinning m is the conservative error, which is the safe one.
-    """
-    import inspect
+    rows = []
+    for i in range(n_eval_seeds):
+        es = str(7000 + i)
+        for ts in _TRAIN_SEEDS:
+            r = {"variant": "hybrid", "train_seed": ts, "scenario": "SCN-05", "eval_seed": es,
+                 "algo": "hybrid", "gridlock_censored": "0"}
+            for col, _l, _d in KPIS:
+                r[col] = "" if (col == blank_kpi and i >= blank_after) else str(10.0 + i)
+            rows.append(r)
+        b = {"variant": "", "train_seed": "", "scenario": "SCN-05", "eval_seed": es,
+             "algo": "webster", "gridlock_censored": "0"}
+        for col, _l, _d in KPIS:
+            b[col] = str(20.0 + i)
+        rows.append(b)
+    return rows
 
+
+def _holm_for(rows, kpi_label):
+    """Run the real C2-shaped family and return (p_holm, n) for one KPI."""
     from scripts.analyze_eval import _family
 
-    src = inspect.getsource(_family)
-    assert "m_used = prereg_m" in src, "m must stay pinned at the pre-registered family size"
-    assert "max(1, prereg_m - n_und)" not in src, "the A3 m-reduction must be gone"
+    dqn, base = _index(rows)
+    seeds = sorted({r["eval_seed"] for r in rows}, key=int)
+    out = _family(dqn, base, seeds, "SCN-05", "hybrid",
+                  [("webster", False, "webster")], "T", [])
+    row = next(r for r in out if r["klabel"] == kpi_label)
+    return row["p_holm"], row["n"], row["undecidable"]
+
+
+def test_a4_an_undecidable_test_does_not_make_its_siblings_easier_to_pass():
+    """A3 shrank m by the undecidable count; A4 retires that, and this checks the BEHAVIOUR.
+
+    n is a function of the DATA (censoring, missing cells), so an m that follows it is exactly the
+    data-dependent m ``_holm``'s docstring warns against: the correction gets weaker precisely when
+    the evidence has already been degraded. The observable consequence is what is asserted here -
+    knocking one KPI down below its decidability floor must leave every OTHER KPI's Holm-adjusted
+    p-value untouched.
+    """
+    n_seeds = 12  # comfortably above the m=7 floor of 9
+    baseline = _full_kpi_rows(n_seeds)
+    # make avg_queue undecidable ALONE by dropping its value on the last 5 eval seeds (n 12 -> 7)
+    degraded = _full_kpi_rows(n_seeds, blank_kpi="avg_queue_length", blank_after=7)
+
+    p_before, n_before, und_before = _holm_for(baseline, "avg_wait")
+    p_after, n_after, und_after = _holm_for(degraded, "avg_wait")
+    _p, n_q, und_q = _holm_for(degraded, "avg_queue")
+
+    assert und_q is True and n_q == 7, "the degraded KPI must actually fall below the floor"
+    assert und_before is False and und_after is False, "avg_wait must stay decidable in both"
+    assert n_before == n_after == 12, "avg_wait's own n must be unaffected"
+    assert p_after == p_before, (
+        "a sibling becoming UNDECIDABLE must NOT change this test's Holm-adjusted p - "
+        f"m shrank ({p_before} -> {p_after})")
+
+
+def test_a4_holm_uses_the_preregistered_family_size_not_the_testable_count():
+    """The pinned m is observable: the smallest raw p is multiplied by the FULL family size."""
+    from scripts.analyze_eval import _family
+
+    rows = _full_kpi_rows(12)
+    dqn, base = _index(rows)
+    seeds = sorted({r["eval_seed"] for r in rows}, key=int)
+    out = _family(dqn, base, seeds, "SCN-05", "hybrid", [("webster", False, "webster")], "T", [])
+    decidable = [r for r in out if not r["undecidable"] and not math.isnan(r["p"])]
+    assert decidable, "fixture must produce decidable tests"
+    smallest = min(decidable, key=lambda r: r["p"])
+    assert smallest["p_holm"] == pytest.approx(min(1.0, 7 * smallest["p"])), (
+        "the most significant test must be corrected by the pre-registered m=7")

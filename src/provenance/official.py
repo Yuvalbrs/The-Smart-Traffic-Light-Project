@@ -35,6 +35,18 @@ def official_lstm_version() -> str:
     raise ValueError(f"cannot parse an lstm version out of {OFFICIAL_LSTM_FILENAME!r}")
 
 
+def official_lstm_checked() -> Path:
+    """The deployed forecaster's path, but only after proving it matches the corpus on disk.
+
+    Prefer this over the bare ``OFFICIAL_LSTM`` constant at every LOAD site. The constant cannot
+    enforce anything, so a guard placed beside it is a guard someone will forget - which is how
+    the checkpoint came to be hand-pinned in five files in the first place. Making the checked
+    accessor the only convenient way to load it puts the invariant where the action is.
+    """
+    assert_official_matches_corpus()
+    return OFFICIAL_LSTM
+
+
 def assert_official_matches_corpus(data_dir: Path | None = None) -> None:
     """Raise unless the pinned forecaster was trained on the corpus currently on disk.
 
