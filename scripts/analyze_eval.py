@@ -10,6 +10,9 @@ Families (SCN-05):
   * C1 / H1 - hybrid vs each of {webster, max_pressure, actuated}, 7 KPIs -> 21 tests.
   * C2 / H2 - hybrid vs plain (the headline forecast ablation), 7 KPIs -> 7 tests.
   * C3 / H3 - hybrid vs random-lstm (information vs capacity), 7 KPIs -> 7 tests.
+  * C4 / H1' - plain vs each of {webster, max_pressure, actuated}, 7 KPIs -> 21 tests (**A5**,
+    pre-registered before any corrected-world episode existed, so the thesis' fallback headline is
+    confirmatory rather than selected after H2 disappointed).
 
 **Amendment A1 (unit of analysis).** One paired observation is ONE EVAL SEED, for every family
 alike. A DQN variant's value on an eval seed is the MEAN across its 3 training seeds; a baseline
@@ -177,7 +180,21 @@ def _worst_rank_delta(recs: list[dict]) -> float:
     obs = [abs(r["va"] - r["vb"]) for r in recs
            if not r["ca"] and not r["cb"] and not np.isnan(r["va"]) and not np.isnan(r["vb"])]
     biggest = max(obs, default=0.0)
-    return biggest * (1.0 + _SENTINEL_FRAC) if biggest > 0 else _SENTINEL_FALLBACK
+    if biggest > 0:
+        return biggest * (1.0 + _SENTINEL_FRAC)
+    # No fully-observed pair to scale against. The former fallback was an ABSOLUTE 1.0, applied
+    # identically to num_stops (~0.04) and throughput (~1000) - so every imputed difference became
+    # +-1.0, the KPI stopped contributing, and all seven KPIs returned the SAME p-value: the
+    # analysis had silently degenerated into a sign test on the censoring pattern, printed as
+    # seven per-KPI rows. Fall back to the observed VALUE scale instead, and only to a bare
+    # constant when there is no numeric information anywhere (in which case `_series` refuses).
+    vals = [r["va"] for r in recs if not r["ca"] and not np.isnan(r["va"])]
+    vals += [r["vb"] for r in recs if not r["cb"] and not np.isnan(r["vb"])]
+    if len(vals) >= 2 and (spread := max(vals) - min(vals)) > 0:
+        return spread * (1.0 + _SENTINEL_FRAC)
+    if vals and abs(vals[0]) > 0:
+        return abs(vals[0]) * _SENTINEL_FRAC
+    return _SENTINEL_FALLBACK
 
 
 def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, b_is_dqn, mode):
@@ -243,6 +260,7 @@ def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, 
         if not np.isnan(r["sda"]):
             sds.append(r["sda"])
 
+    n_observed = sum(1 for r in recs if not r["ca"] and not r["cb"])
     meta = {
         "missing": missing,
         "dropped_cens": dropped_cens,
@@ -250,9 +268,30 @@ def _series(dqn, base, eval_seeds, scenario, kpi, direction, a_variant, b_name, 
         "cens_a": cens_a,
         "cens_b": cens_b,
         "imputed": imputed,
+        # How many pairs carry REAL measurements on both arms. `_wilcoxon` sees only the numbers
+        # and cannot tell an imputed zero from a measured tie: with every pair mutually censored
+        # it returned p=1.0, median 0.00 and a ZERO-WIDTH CI, which `build_supporting_regime`
+        # published as "no effect detected" on data containing no observations at all. Callers
+        # must gate on this, not on len(d).
+        "n_observed": n_observed,
+        "fully_imputed": bool(recs) and n_observed == 0,
+        "n_train_seed_values": int(len(sds)),
         "sd_ts": float(np.mean(sds)) if sds else float("nan"),
     }
     return np.array(a_vals, dtype=float), np.array(b_vals, dtype=float), meta
+
+
+def _effective_n(a: np.ndarray, b: np.ndarray) -> int:
+    """Pairs that can actually carry signed-rank evidence, i.e. non-zero differences.
+
+    A3 compared the RAW pair count against the attainable-n floor. A4.2's both-censored rule
+    injects exact zeros, and Pratt zeros raise the attainable minimum p well above 2/2**n - so a
+    family could hold 9 mutual failures plus 6 unanimous observed pairs, report n=15, be incapable
+    of rejecting under any data, and still occupy a Holm slot taxing its 20 siblings. Measured:
+    at n=15 with 6 zeros the best attainable p is 0.0035 against a C1 threshold of 0.00238.
+    """
+    d = np.asarray(a, dtype=float) - np.asarray(b, dtype=float)
+    return int(np.count_nonzero(d))
 
 
 def _wilcoxon(a: np.ndarray, b: np.ndarray):
@@ -321,14 +360,17 @@ def _family(dqn, base, eval_seeds, scenario, a_variant, comparisons, title, line
             ca, cb, cm = _series(dqn, base, eval_seeds, scenario, kpi, direction,
                                  a_variant, b_name, b_is_dqn, "complete")
             p_c, med_c, lo_c, hi_c, n_c = _wilcoxon(ca, cb)
-            # A3: a test that cannot clear its family's Holm threshold under ANY data leaves
-            # the family rather than occupying a slot and taxing its siblings.
-            undecidable = n_p < floor_n
+            # A3 (+A4): a test that cannot clear its family's Holm threshold under ANY data is
+            # reported UNDECIDABLE. The count that matters is the EFFECTIVE one - pairs with a
+            # non-zero difference - because Pratt zeros cannot contribute signed-rank evidence.
+            # A comparison with no fully-observed pair at all is undecidable by definition.
+            n_eff = _effective_n(pa, pb)
+            undecidable = (n_eff < floor_n) or pm["fully_imputed"]
             # A2.4: an imputed magnitude may not stand as the reported effect size.
             eff = (med_c, lo_c, hi_c, "complete-case") if pm["imputed"] else (med_p, lo_p, hi_p, "primary")
             rows.append({
                 "kpi": kpi, "klabel": klabel, "blabel": blabel, "headline": kpi in HEADLINE,
-                "p": p_p, "n": n_p, "meta": pm, "undecidable": undecidable,
+                "p": p_p, "n": n_p, "n_eff": n_eff, "meta": pm, "undecidable": undecidable,
                 "med": eff[0], "lo": eff[1], "hi": eff[2], "eff_src": eff[3],
                 "p_c": p_c, "n_c": n_c, "meta_c": cm,
             })
@@ -362,7 +404,9 @@ def _family(dqn, base, eval_seeds, scenario, a_variant, comparisons, title, line
         sd = f"{r['meta']['sd_ts']:.2f}" if not np.isnan(r["meta"]["sd_ts"]) else "n/a"
         pr = f"{r['p']:.4f}" if not np.isnan(r["p"]) else "n/a"
         if r["undecidable"]:
-            ph, sig = "excluded", f"UNDECIDABLE (n={r['n']})"
+            why = ("no fully-observed pair" if r["meta"]["fully_imputed"]
+                   else f"n_eff={r['n_eff']}<{floor_n}")
+            ph, sig = "excluded", f"UNDECIDABLE ({why})"
         else:
             ph = f"{r['p_holm']:.4f}{_stars(r['p_holm'])}" if not np.isnan(r["p_holm"]) else "n/a"
             sig = "**YES**" if r["sig"] else "."
@@ -489,8 +533,19 @@ def main() -> None:
              "censoring); SENSITIVITY = complete-case (dropped if EITHER arm censored). Both reported; a "
              "disagreement IS the result. This replaces the superseded both-censored drop, which kept "
              "exactly the episodes the treatment won by not failing.",
-             "- **A3** - a test that cannot reject under any data is reported UNDECIDABLE and leaves its "
-             "Holm family, with m reduced and stated.",
+             "- **A3+A4** - a test that cannot reject under any data is reported UNDECIDABLE and is "
+             "never a non-rejection. A4 RETIRED A3's m-reduction: n is data-dependent, so shrinking m "
+             "by the undecidable count weakens the correction exactly when the evidence is already "
+             "degraded. m stays PINNED at the pre-registered family size. Decidability uses the "
+             "EFFECTIVE n (non-zero differences), since Pratt zeros carry no signed-rank evidence.",
+             "- **A4** - censored pairs are imputed on the DIFFERENCE scale (1.10x the largest "
+             "fully-observed |d|), signed by which arm failed. A2.2 imputed an extreme VALUE, which "
+             "does not control the rank the test actually uses.",
+             "- **A5** - family **C4** (`plain` vs the 3 baselines, H1') is confirmatory, pre-registered "
+             "before any corrected-world episode existed. Every claim in C1-C4 is CONDITIONAL ON THE "
+             "THREE TRAINED CHECKPOINTS (seeds 42/123/2024): the same 3 policies underwrite all "
+             "per-eval-seed observations, so the design holds 3 independent draws of the training "
+             "process, not 15. Algorithm-level language is not used (A5.4).",
              "",
              f"_Eval seeds present for SCN-05: {len(es05)} (A1.3 locks 15: 7000-7014)._",
              *(["", "> **THIS REPORT IS NOT REPORTABLE.** The input carries "
@@ -512,6 +567,12 @@ def main() -> None:
     _family(dqn, base, es05, "SCN-05", "hybrid",
             [("random-lstm", True, "random-lstm")],
             "C3 / H3 - hybrid vs random-lstm (info vs capacity, 7 tests)", lines)
+    # A5 / H1': the no-forecast agent against the baselines. Corrected within C4 alone - merging
+    # it into C1 would change C1's pre-registered m after the fact.
+    _family(dqn, base, es05, "SCN-05", "plain",
+            [("webster", False, "webster"), ("max_pressure", False, "max_pressure"),
+             ("actuated", False, "actuated")],
+            "C4 / H1' - plain (no forecast) vs 3 baselines (21 tests, A5)", lines)
 
     _supporting_regime(dqn, base, rows, lines)
 

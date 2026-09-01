@@ -344,3 +344,97 @@ def test_a4_holm_uses_the_preregistered_family_size_not_the_testable_count():
     smallest = min(decidable, key=lambda r: r["p"])
     assert smallest["p_holm"] == pytest.approx(min(1.0, 7 * smallest["p"])), (
         "the most significant test must be corrected by the pre-registered m=7")
+
+
+# ---------------------------------------------------------------------------
+# The three critical defects found by adversarial review of A1-A4 (2026-09-01).
+# ---------------------------------------------------------------------------
+
+
+def test_undecidability_uses_effective_n_not_the_raw_pair_count():
+    """DEFECT 2: A4.2's mutual-failure ties switched off A3's own guard.
+
+    A3 compared the RAW pair count against the attainable-n floor. A4.2 scores a both-censored
+    pair as an exact zero difference, and Pratt zeros carry no signed-rank evidence - they raise
+    the attainable minimum p well above 2/2**n. So a family could hold 9 mutual failures plus 6
+    unanimous observed pairs, report n=15, be incapable of rejecting under any data, and still
+    consume a Holm slot that taxes its 20 siblings.
+    """
+    from scripts.analyze_eval import _effective_n, min_testable_n
+
+    n_seeds = 15
+    mutual = {str(7000 + i) for i in range(9)}  # 9 pairs where BOTH arms gridlock
+    rows = _fixture(n_eval_seeds=n_seeds, base_censor=mutual,
+                    dqn_censor={(es, ts) for es in mutual for ts in _TRAIN_SEEDS})
+    dqn, base = _index(rows)
+    a, b, meta = _series(dqn, base, _seeds(n_seeds), "SCN-05", "avg_waiting_time", "lower",
+                         "hybrid", "webster", False, "primary")
+    assert len(a) == 15, "A2 still drops no pair for censoring"
+    assert _effective_n(a, b) == 6, "only the 6 fully-observed pairs carry evidence"
+    assert _effective_n(a, b) < min_testable_n(21), (
+        "6 informative pairs cannot clear the C1 Holm floor -> the test must be UNDECIDABLE, "
+        "which the raw count of 15 would have hidden")
+
+
+def test_fully_censored_comparison_is_flagged_not_published_as_parity():
+    """DEFECT 4: total data loss was published as measured parity with a zero-width CI.
+
+    With every pair censored, `_series` returned all-zero arrays, `_wilcoxon` hit its
+    `allclose(d, 0)` branch and returned (p=1.0, median=0.0, CI=[0,0]) - which the supporting
+    table printed as "no effect detected", dropped=0. The allclose reasoning is right for
+    MEASURED ties and wrong for IMPUTED ones, and `_wilcoxon` cannot tell them apart because the
+    provenance was thrown away before it was called. `meta` now carries it.
+    """
+    n = 5
+    every = {str(7000 + i) for i in range(n)}
+    rows = _fixture(n_eval_seeds=n, base_censor=every,
+                    dqn_censor={(es, ts) for es in every for ts in _TRAIN_SEEDS})
+    dqn, base = _index(rows)
+    a, b, meta = _series(dqn, base, _seeds(n), "SCN-05", "avg_waiting_time", "lower",
+                         "hybrid", "webster", False, "primary")
+    assert meta["fully_imputed"] is True and meta["n_observed"] == 0
+    assert (a - b).tolist() == [0.0] * n, "mutual failure is still scored as a tie (A2.2)"
+    # the complete-case sensitivity analysis has literally nothing left
+    _ac, _bc, meta_c = _series(dqn, base, _seeds(n), "SCN-05", "avg_waiting_time", "lower",
+                               "hybrid", "webster", False, "complete")
+    assert meta_c["dropped_cens"] == n
+
+
+def test_a_partially_censored_comparison_still_carries_its_own_kpi_scale():
+    """DEFECT 3: the imputed magnitude fell back to an ABSOLUTE 1.0 with no observed pair.
+
+    `_worst_rank_delta` scaled off fully-observed DIFFERENCES only, so with none it returned the
+    constant 1.0 - applied identically to num_stops (~0.04) and throughput (~1000). Every imputed
+    difference became +-1.0, the KPI stopped contributing, and all seven KPIs returned the SAME
+    p-value: a sign test on the censoring pattern, printed as seven per-KPI rows.
+
+    The magnitude must track the KPI's own scale. (When NO pair is observed the comparison carries
+    no KPI information at all and identical p-values are correct - it is then flagged
+    `fully_imputed`; see the test above.)
+    """
+    from scripts.analyze_eval import _worst_rank_delta
+
+    small = [{"va": 0.040, "vb": 0.041, "ca": True, "cb": False},
+             {"va": 0.043, "vb": 0.044, "ca": True, "cb": False}]
+    large = [{"va": 900.0, "vb": 910.0, "ca": True, "cb": False},
+             {"va": 930.0, "vb": 940.0, "ca": True, "cb": False}]
+    d_small, d_large = _worst_rank_delta(small), _worst_rank_delta(large)
+    assert d_small != 1.0 and d_large != 1.0, "the absolute-1.0 fallback must be gone"
+    assert d_large > d_small * 100, (
+        f"the imputed magnitude must track the KPI scale, got {d_small} vs {d_large}")
+
+
+def test_train_seed_provenance_is_carried_so_a_lone_seed_cannot_read_as_robust():
+    """DEFECT 8: a single surviving train seed reported sd_ts = 0.00, i.e. perfect robustness.
+
+    `_arm_value` treats a train seed as present if ANY row exists, so deleting two of three rows
+    yielded (value, censored=False, sd=0.0, present=True) - rendered in the results table as
+    `0.00`. `meta` now reports how many train-seed values actually entered the mean.
+    """
+    rows = [r for r in _fixture(n_eval_seeds=3)
+            if not (r["variant"] == "hybrid" and r["eval_seed"] == "7001"
+                    and r["train_seed"] in ("123", "2024"))]
+    dqn, base = _index(rows)
+    _a, _b, meta = _series(dqn, base, _seeds(3), "SCN-05", "avg_waiting_time", "lower",
+                           "hybrid", "webster", False, "primary")
+    assert "n_train_seed_values" in meta

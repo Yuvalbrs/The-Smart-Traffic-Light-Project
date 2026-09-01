@@ -43,6 +43,7 @@ from scripts.analyze_eval import (
     _holm,
     _index,
     _load,
+    _effective_n,
     _num,
     _series,
     _stars,
@@ -179,7 +180,13 @@ def build_confirmatory_family(
                     "ci_hi": eff[2],
                     "effect_source": eff[3],
                     "p_raw": p,
-                    "undecidable": bool(n < floor_n),
+                    # A4: decidability uses the EFFECTIVE n (non-zero differences) - Pratt zeros
+                    # from A4.2 mutual-failure ties carry no signed-rank evidence - and a
+                    # comparison with no fully-observed pair is undecidable by definition.
+                    "undecidable": bool(_effective_n(a, b) < floor_n or meta["fully_imputed"]),
+                    "n_eff": _effective_n(a, b),
+                    "n_observed": meta["n_observed"],
+                    "fully_imputed": meta["fully_imputed"],
                     "n_cc": n_c,
                     "dropped_cc": meta_c["dropped_cens"],
                     "p_raw_cc": p_c,
@@ -227,6 +234,20 @@ def build_family_c3(rows: list[dict]) -> pd.DataFrame:
     return build_confirmatory_family(rows, "hybrid", [("random-lstm", True, "DQN-random-lstm")])
 
 
+def build_family_c4(rows: list[dict]) -> pd.DataFrame:
+    """C4/H1' (A5): plain vs {webster, max_pressure, actuated} x 7 KPIs = 21 hypotheses (SCN-05).
+
+    Pre-registered 2026-09-01, before any corrected-world evaluation episode existed, so that the
+    thesis' fallback headline - "the RL controller beats the baselines" - is confirmatory rather
+    than a comparison promoted after the forecast ablation disappointed.
+    """
+    return build_confirmatory_family(
+        rows,
+        "plain",
+        [("webster", False, "Webster"), ("max_pressure", False, "Max-pressure"), ("actuated", False, "SUMO-actuated")],
+    )
+
+
 def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
     """Exploratory: hybrid vs plain and hybrid vs random-lstm on the 3 headline KPIs, ALL 5
     scenarios, raw p, no family correction. Shows where the forecast helps / hurts by regime -
@@ -245,11 +266,21 @@ def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
                                      "hybrid", b_name, True, "primary")
                 dropped = meta["dropped"]
                 p, med, lo, hi, n = _wilcoxon(a, b)
+                # A2.4/A4.2: an imputed magnitude may drive the p-value but NEVER the reported
+                # effect size. build_confirmatory_family already honours this; this function did
+                # not, and was printing the +-D sentinel to the reader as a wait time in seconds.
+                if meta["imputed"]:
+                    ac, bc, _mc = _series(dqn, base, es, scenario, kpi_col, direction,
+                                          "hybrid", b_name, True, "complete")
+                    _pc, med, lo, hi, _nc = _wilcoxon(ac, bc)
                 # prereg s7: an exploratory non-rejection is "not detected at this power",
                 # never "no effect" - and the n quoted must be the ACTUAL n (A1.2), not 15.
-                verdict = f"no effect detected at n={n}" if (np.isnan(p) or p >= ALPHA) else (
+                # A fully-imputed comparison contains no measurement at all; calling it
+                # "no effect detected" is the most misleading line the pipeline can emit.
+                verdict = "NO DATA (every pair censored)" if meta["fully_imputed"] else (
+                    f"no effect detected at n={n}" if (np.isnan(p) or p >= ALPHA) else (
                     "hybrid better" if (med < 0) == (direction == "lower") else "hybrid worse"
-                )
+                ))
                 records.append(
                     {
                         "scenario": scenario,
@@ -260,6 +291,9 @@ def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
                         "ci_lo": lo,
                         "ci_hi": hi,
                         "n": n,
+                        "n_observed": meta["n_observed"],
+                        "imputed": meta["imputed"],
+                        "effect_source": "complete-case" if meta["imputed"] else "primary",
                         "dropped": dropped,
                         "p_raw": p,
                         "verdict": verdict,
