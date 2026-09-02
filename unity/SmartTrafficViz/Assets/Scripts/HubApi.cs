@@ -300,9 +300,11 @@ namespace SmartTraffic
                 Status = (string)o["status"],
                 Error = (string)o["error"],
                 Done = (int?)o["episodes_done"] ?? 0,
-                Total = (int?)o["episodes"] ?? 0,
+                // episodes_TOTAL here, not "episodes" - the evaluation job names it differently
+                // from the training job, and reading the training key gave a permanent "4/0".
+                Total = (int?)o["episodes_total"] ?? 0,
                 Pct = (double?)o["pct"] ?? 0d,
-                Detail = (string)o["model_label"] ?? (string)o["model_id"],
+                Detail = ((string)o["label"] ?? (string)o["model_id"]) + " on " + (string)o["scenario"],
             };
         }
 

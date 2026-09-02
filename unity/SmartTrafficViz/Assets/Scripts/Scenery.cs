@@ -105,12 +105,21 @@ namespace SmartTraffic
             BuildClouds(root, rng);
         }
 
+        /// <summary>
+        /// Trees: a tapering trunk and a canopy built from lobes.
+        ///
+        /// Two stacked cones on a plain cylinder is a diagram of a tree. What the eye reads as a
+        /// tree is a trunk that thins as it rises and a crown with more than one bulge in it, so
+        /// the outline is not a triangle. Broadleaf crowns use the same union-of-lobes surface as
+        /// the clouds, but FACETED rather than smooth - foliage catching light in planes is what
+        /// makes low-poly greenery read as leaves instead of as a balloon.
+        /// </summary>
         private static void BuildTrees(Transform root, System.Random rng)
         {
             var trees = new GameObject("Trees").transform;
             trees.SetParent(root);
 
-            for (var i = 0; i < 320; i++)
+            for (var i = 0; i < 260; i++)
             {
                 var x = (float)(rng.NextDouble() * 2 - 1) * 260f;
                 var z = (float)(rng.NextDouble() * 2 - 1) * 260f;
@@ -120,45 +129,59 @@ namespace SmartTraffic
                 const float clear = IntersectionScene.HalfRoad + 8f;
                 if (Mathf.Abs(x) < clear || Mathf.Abs(z) < clear) continue;
 
-                var height = 6f + (float)rng.NextDouble() * 9f;
-                var radius = height * (0.22f + (float)rng.NextDouble() * 0.08f);
+                var height = 7f + (float)rng.NextDouble() * 10f;
+                var radius = height * (0.20f + (float)rng.NextDouble() * 0.09f);
                 var colour = Foliage[rng.Next(Foliage.Length)];
                 var at = new Vector3(x, 0f, z);
 
-                var trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                trunk.name = "Trunk";
-                trunk.transform.SetParent(trees);
-                trunk.transform.localScale = new Vector3(radius * 0.22f, height * 0.2f, radius * 0.22f);
-                trunk.transform.position = at + Vector3.up * (height * 0.2f);
-                Object.Destroy(trunk.GetComponent<Collider>());
-                IntersectionScene.Paint(trunk, TrunkColor);
+                // Trunk in two narrowing sections - one cylinder is a post, not a trunk.
+                Taper(trees, at, radius * 0.30f, radius * 0.20f, height * 0.34f, 0f);
+                Taper(trees, at, radius * 0.20f, radius * 0.13f, height * 0.26f, height * 0.34f);
 
-                // A third of them are broadleaf. A verge of nothing but identical firs reads as
-                // wallpaper; mixing two crown shapes is the cheapest way to break that up, and
-                // roadside planting is mixed in any case.
-                if (rng.NextDouble() < 0.34)
+                if (rng.NextDouble() < 0.45)
                 {
-                    var crowns = 2 + rng.Next(2);
-                    for (var c = 0; c < crowns; c++)
+                    var count = 3 + rng.Next(3);
+                    var lobes = new Blob.Lobe[count];
+                    for (var l = 0; l < count; l++)
                     {
-                        var blob = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                        blob.name = "Crown";
-                        blob.transform.SetParent(trees);
-                        var s = radius * (1.5f + (float)rng.NextDouble() * 0.7f);
-                        blob.transform.localScale = new Vector3(s, s * 0.85f, s);
-                        blob.transform.position = at + Vector3.up * (height * 0.55f)
-                            + new Vector3((float)(rng.NextDouble() - 0.5) * radius * 1.3f,
-                                (float)rng.NextDouble() * height * 0.22f,
-                                (float)(rng.NextDouble() - 0.5) * radius * 1.3f);
-                        Object.Destroy(blob.GetComponent<Collider>());
-                        IntersectionScene.Paint(blob, colour);
+                        lobes[l] = new Blob.Lobe(
+                            new Vector3((float)(rng.NextDouble() - 0.5) * radius * 1.5f,
+                                (float)(rng.NextDouble() - 0.5) * radius * 1.1f,
+                                (float)(rng.NextDouble() - 0.5) * radius * 1.5f),
+                            radius * (1.05f + (float)rng.NextDouble() * 0.55f));
                     }
+                    var crown = new GameObject("Crown");
+                    crown.transform.SetParent(trees);
+                    crown.transform.position = at + Vector3.up * (height * 0.72f);
+                    crown.transform.rotation = Quaternion.Euler(0f, (float)rng.NextDouble() * 360f, 0f);
+                    crown.AddComponent<MeshFilter>().sharedMesh = Blob.Build(
+                        lobes, rings: 8, sectors: 12, flatBase: -999f, smooth: false,
+                        jitter: 0.14f, rng: rng);
+                    crown.AddComponent<MeshRenderer>();
+                    IntersectionScene.Paint(crown, colour);
                     continue;
                 }
 
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.35f), radius, height * 0.75f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.70f), radius * 0.72f, height * 0.55f, colour);
+                // Conifer in three tiers, each narrower, so the outline steps instead of being
+                // one long triangle.
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.34f), radius * 1.25f, height * 0.44f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.56f), radius * 1.00f, height * 0.38f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.76f), radius * 0.70f, height * 0.32f, colour);
             }
+        }
+
+        /// <summary>A trunk section that narrows as it rises.</summary>
+        private static void Taper(Transform parent, Vector3 at, float rBottom, float rTop,
+            float height, float yOffset)
+        {
+            var trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            trunk.name = "Trunk";
+            trunk.transform.SetParent(parent);
+            var mid = (rBottom + rTop) * 0.5f;
+            trunk.transform.localScale = new Vector3(mid * 2f, height / 2f, mid * 2f);
+            trunk.transform.position = at + Vector3.up * (yOffset + height / 2f);
+            Object.Destroy(trunk.GetComponent<Collider>());
+            IntersectionScene.Paint(trunk, TrunkColor);
         }
 
         /// <summary>
@@ -381,61 +404,59 @@ namespace SmartTraffic
         }
 
         /// <summary>
-        /// Cumulus, built as clusters of ellipsoids with a flat base.
+        /// Cumulus: ONE lumpy surface per cloud, with a flat bottom.
         ///
-        /// The old version scattered a handful of equal spheres around a point, which reads as a
-        /// bunch of grapes: real cumulus sit ON a level, because that level is where the air
-        /// reaches its condensation temperature. So every puff in a cloud shares one base height
-        /// and only grows upward, the puffs get smaller the higher they sit, and the whole cluster
-        /// is stretched along one axis instead of being spherical in plan.
+        /// The previous version scattered separate ellipsoids around a point, and separate
+        /// ellipsoids do not make a cloud - they make a pile of balls, with a visible outline
+        /// wherever one ends and the next begins. That is what it looked like, and no amount of
+        /// tuning the placement was going to fix it, because the problem was that the cloud was
+        /// several objects.
         ///
-        /// Two shades: the lower puffs are slightly grey, the upper ones near-white, which fakes
-        /// the self-shadowing that makes a cloud look like it has volume.
+        /// It is now a single mesh: the lobes are unioned into one surface by <see cref="Blob"/>,
+        /// so there are no internal edges at all. Smooth normals rather than facets, because a
+        /// cloud is the one thing in this scene that should not look faceted.
+        ///
+        /// The base is flat because that is physically why cumulus have flat bottoms - it is the
+        /// altitude where rising air reaches its condensation temperature, and every cloud in one
+        /// air mass finds it at the same height. A fully round cloud reads as a balloon.
         /// </summary>
         private static void BuildClouds(Transform root, System.Random rng)
         {
             var clouds = new GameObject("Clouds").transform;
             clouds.SetParent(root);
 
-            for (var i = 0; i < 22; i++)
+            for (var i = 0; i < 26; i++)
             {
-                // Was 160-240, which put them above the top of frame at the demo camera angle.
-                var baseY = 105f + (float)rng.NextDouble() * 70f;
-                var centre = new Vector3(
-                    (float)(rng.NextDouble() * 2 - 1) * 520f,
-                    baseY,
-                    (float)(rng.NextDouble() * 2 - 1) * 520f);
-
-                // One horizontal direction the cluster elongates along - clouds are drawn out by
-                // wind, not round.
+                var scale = 26f + (float)rng.NextDouble() * 26f;
                 var drift = (float)(rng.NextDouble() * Mathf.PI * 2);
-                var along = new Vector3(Mathf.Cos(drift), 0f, Mathf.Sin(drift));
-                var across = new Vector3(-along.z, 0f, along.x);
-                var spread = 44f + (float)rng.NextDouble() * 46f;
-                var scale = 0.8f + (float)rng.NextDouble() * 0.7f;
 
-                var puffs = 6 + rng.Next(5);
-                for (var p = 0; p < puffs; p++)
+                // Lobes along one axis, fattest in the middle, all sitting on the same floor.
+                var count = 4 + rng.Next(4);
+                var lobes = new Blob.Lobe[count];
+                for (var l = 0; l < count; l++)
                 {
-                    // Bias along the drift axis; a little across; upward only.
-                    var u = (float)(rng.NextDouble() * 2 - 1);
-                    var lift = (1f - Mathf.Abs(u)) * (float)rng.NextDouble();   // fattest in the middle
-                    var at = centre
-                             + along * (u * spread)
-                             + across * ((float)(rng.NextDouble() * 2 - 1) * spread * 0.34f)
-                             + Vector3.up * (lift * 15f * scale);
-
-                    var size = (16f + (float)rng.NextDouble() * 16f) * scale
-                               * Mathf.Lerp(1f, 0.62f, lift);   // smaller the higher it sits
-                    var puff = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                    puff.name = "Puff";
-                    puff.transform.SetParent(clouds);
-                    puff.transform.localScale = new Vector3(size, size * 0.62f, size * 0.86f);
-                    puff.transform.position = at;
-                    puff.transform.rotation = Quaternion.Euler(0f, drift * Mathf.Rad2Deg, 0f);
-                    Object.Destroy(puff.GetComponent<Collider>());
-                    IntersectionScene.Paint(puff, lift > 0.45f ? CloudColor : CloudShadow);
+                    var t = count == 1 ? 0f : l / (float)(count - 1) * 2f - 1f;   // -1..1
+                    var bulge = 1f - 0.55f * Mathf.Abs(t);
+                    lobes[l] = new Blob.Lobe(
+                        new Vector3(t * scale * 0.85f,
+                            (float)rng.NextDouble() * scale * 0.20f,
+                            (float)(rng.NextDouble() - 0.5) * scale * 0.35f),
+                        scale * (0.48f + 0.32f * bulge));
                 }
+
+                var mesh = Blob.Build(lobes, rings: 14, sectors: 22,
+                    flatBase: -scale * 0.16f, smooth: true, jitter: 0.06f, rng: rng);
+
+                var go = new GameObject("Cloud");
+                go.transform.SetParent(clouds);
+                go.transform.position = new Vector3(
+                    (float)(rng.NextDouble() * 2 - 1) * 540f,
+                    120f + (float)rng.NextDouble() * 70f,
+                    (float)(rng.NextDouble() * 2 - 1) * 540f);
+                go.transform.rotation = Quaternion.Euler(0f, drift * Mathf.Rad2Deg, 0f);
+                go.AddComponent<MeshFilter>().sharedMesh = mesh;
+                go.AddComponent<MeshRenderer>();
+                IntersectionScene.Paint(go, CloudColor);
             }
         }
 

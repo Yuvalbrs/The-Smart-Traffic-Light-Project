@@ -141,7 +141,11 @@ namespace SmartTraffic
             GUI.Label(new Rect(x, y, w, 28f), "Trained models", UITheme.Heading);
             y += 34f;
 
-            var listH = Mathf.Max(120f, box.yMax - y - 30f);
+            // The evaluate row used to be drawn at a fixed offset from the panel bottom, straight
+            // over the scrolling model list. It gets its own reserved strip now, and the list
+            // shortens to make room - two things sharing one rectangle is not a layout.
+            var evalH = _evalFor != null ? 150f : 0f;
+            var listH = Mathf.Max(120f, box.yMax - y - 30f - evalH);
             var view = new Rect(x, y, w, listH);
             var rowH = 44f;
             var content = new Rect(0f, 0f, w - 24f, _api.Models.Count * rowH + 10f);
@@ -164,37 +168,76 @@ namespace SmartTraffic
                 }
             }
             GUI.EndScrollView();
-            y += listH + 6f;
+            y += listH + 8f;
 
-            if (_evalFor != null) DrawEvaluate(x, box.yMax - 108f, w);
+            if (_evalFor != null) DrawEvaluate(x, y, w, evalH);
         }
 
-        private void DrawEvaluate(float x, float y, float w)
+        private void DrawEvaluate(float x, float y, float w, float h)
         {
-            var scenarios = _api.Scenarios.Count > 0 ? _api.Scenarios.ToArray() : new[] { "SCN-05" };
-            _evalScenario = Mathf.Clamp(_evalScenario, 0, scenarios.Length - 1);
+            var panel = new Rect(x - 10f, y, w + 20f, h - 8f);
+            UITheme.Backdrop(panel);
 
-            GUI.Label(new Rect(x, y, 200f, 34f), "evaluate on", UITheme.Label);
-            _evalScenario = Picker(new Rect(x + 200f, y, 420f, 38f), scenarios, _evalScenario, false);
-            GUI.Label(new Rect(x + 640f, y, 90f, 34f), "seeds", UITheme.Label);
-            _evalSeeds = IntField(new Rect(x + 720f, y, 100f, 38f), _evalSeeds, false);
+            var scenarios = _api.Scenarios.Count > 0 ? _api.Scenarios : new List<string> { "SCN-05" };
+            _evalScenario = Mathf.Clamp(_evalScenario, 0, scenarios.Count - 1);
+
+            var row = y + 14f;
+            GUI.Label(new Rect(x, row + 6f, 300f, 30f),
+                "Evaluate " + ShortModel(_evalFor), UITheme.Heading);
+            row += 40f;
+
+            // A stepper, not eleven buttons: at this width each button was a few pixels wide and
+            // the labels were unreadable.
+            GUI.Label(new Rect(x, row + 6f, 130f, 30f), "scenario", UITheme.Label);
+            if (GUI.Button(new Rect(x + 130f, row, 52f, 38f), "<", UITheme.Button))
+            {
+                _evalScenario = (_evalScenario - 1 + scenarios.Count) % scenarios.Count;
+            }
+            GUI.Label(new Rect(x + 186f, row, 190f, 38f), scenarios[_evalScenario],
+                CentredLabel());
+            if (GUI.Button(new Rect(x + 376f, row, 52f, 38f), ">", UITheme.Button))
+            {
+                _evalScenario = (_evalScenario + 1) % scenarios.Count;
+            }
+
+            GUI.Label(new Rect(x + 456f, row + 6f, 90f, 30f), "seeds", UITheme.Label);
+            _evalSeeds = IntField(new Rect(x + 540f, row, 90f, 38f), _evalSeeds, false);
 
             var ev = _api.Evaluation;
             var busy = ev != null && ev.Running;
-            if (GUI.Button(new Rect(x + 840f, y, 200f, 38f), busy ? "evaluating..." : "Run evaluation",
+            if (GUI.Button(new Rect(x + 660f, row, 230f, 38f),
+                    busy ? "evaluating..." : "Run evaluation",
                     busy ? UITheme.ButtonOff : UITheme.Button) && !busy)
             {
                 _api.StartEvaluation(_evalFor, scenarios[_evalScenario], _evalSeeds);
             }
+            if (GUI.Button(new Rect(x + 906f, row, 130f, 38f), "Close", UITheme.Button))
+            {
+                _evalFor = null;
+            }
 
             if (ev != null)
             {
-                GUI.Label(new Rect(x, y + 44f, w, 26f),
+                GUI.Label(new Rect(x, row + 44f, w - 20f, 28f),
                     ev.Status == "done"
-                        ? "Evaluated " + ev.Detail + " - open Compare to see it beside the campaign."
-                        : ev.Detail + " - " + ev.Status + " " + ev.Done + "/" + ev.Total,
-                    UITheme.Hint);
+                        ? "Done: " + ev.Detail + " - open Compare to see it beside the campaign."
+                        : ev.Detail + " - " + ev.Status + "  " + ev.Done + "/" + ev.Total,
+                    ev.Status == "done" ? UITheme.Good : UITheme.Hint);
             }
+        }
+
+        private string ShortModel(string id)
+        {
+            foreach (var m in _api.Models)
+            {
+                if (m.Id == id) return m.Label;
+            }
+            return id;
+        }
+
+        private static GUIStyle CentredLabel()
+        {
+            return new GUIStyle(UITheme.Label) { alignment = TextAnchor.MiddleCenter };
         }
 
         // ------------------------------------------------------------------ widgets
