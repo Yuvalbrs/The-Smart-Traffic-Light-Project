@@ -29,7 +29,15 @@ namespace SmartTraffic
             new Color(0.28f, 0.42f, 0.34f), new Color(0.34f, 0.47f, 0.52f),
             new Color(0.45f, 0.55f, 0.62f),
         };
+        /// <summary>No mountain footprint may come closer than this to the junction centre.
+        /// The arms reach <c>IntersectionScene.ArmLength</c> (150 m); this leaves a clear
+        /// margin beyond the far end of every one of them.</summary>
+        private const float Clearance = 300f;
+
         private static readonly Color SnowColor = new Color(0.92f, 0.94f, 0.97f);
+        /// <summary>The daylight sky, which distant geometry fades toward.</summary>
+        private static readonly Color HazeColor = new Color(0.58f, 0.68f, 0.80f);
+
         private static readonly Color CloudColor = new Color(0.96f, 0.97f, 1.00f);
         //: The underside of a cumulus is never white. Two flat shades fake self-shadowing
         //: cheaply; a real gradient would need a shader this build deliberately does not have.
@@ -177,10 +185,10 @@ namespace SmartTraffic
 
             // Two staggered rings: a far wall and a nearer, lower one. A single ring at one radius
             // gives every peak the same apparent size, which flattens the horizon.
-            BuildRidgeRing(hills, rng, count: 26, minDist: 520f, spread: 240f,
-                minHeight: 150f, heightSpread: 190f, snowChance: 0.75f);
-            BuildRidgeRing(hills, rng, count: 18, minDist: 380f, spread: 120f,
-                minHeight: 70f, heightSpread: 80f, snowChance: 0.12f);
+            BuildRidgeRing(hills, rng, count: 26, minDist: 620f, spread: 320f,
+                minHeight: 130f, heightSpread: 150f, snowChance: 0.70f);
+            BuildRidgeRing(hills, rng, count: 20, minDist: 420f, spread: 160f,
+                minHeight: 55f, heightSpread: 65f, snowChance: 0.10f);
         }
 
         private static void BuildRidgeRing(Transform hills, System.Random rng, int count,
@@ -207,25 +215,44 @@ namespace SmartTraffic
                     // Subsidiary peaks are lower, which is what makes the main one read as main.
                     var drop = k == 0 ? 1f : 0.50f + (float)rng.NextDouble() * 0.28f;
                     var height = (minHeight + (float)rng.NextDouble() * heightSpread) * drop;
-                    var radius = height * (0.80f + (float)rng.NextDouble() * 0.55f);
+                    // Much wider than tall. The first version used 0.8-1.35x the height, which is
+                    // a spire; hills in the world are several times wider than they are high, and
+                    // that ratio is most of what makes a silhouette read as rock.
+                    var radius = height * (1.5f + (float)rng.NextDouble() * 0.7f);
                     var yaw = (float)rng.NextDouble() * 360f;
+
+                    // Keep the whole footprint off the network. A mountain centred beyond the
+                    // arms can still overlap them once it is this wide - which is exactly what
+                    // put one through the middle of a carriageway.
+                    var here = at + jitter;
+                    var flat = new Vector3(here.x, 0f, here.z);
+                    var needed = Clearance + radius;
+                    if (flat.magnitude < needed)
+                    {
+                        var dir = flat.sqrMagnitude > 0.01f ? flat.normalized : Vector3.forward;
+                        here = new Vector3(dir.x * needed, here.y, dir.z * needed);
+                    }
 
                     // One ridge drives both meshes, so the snow cannot drift off the rock.
                     const int sides = 26;
                     var ridge = new Ridge(rng);
 
-                    Place(hills, "Mountain", at + jitter, yaw, radius, height,
-                        RidgeMesh(ridge, sides, 0f, 1f, 1f, rng),
-                        HillColor[rng.Next(HillColor.Length)]);
+                    // Aerial perspective: air between the viewer and the rock scatters light, so
+                    // distant ridges wash toward the sky colour. It is the cue that separates a
+                    // far wall from a near one, and without it every ridge sits at one depth.
+                    var haze = Mathf.Clamp01((here.magnitude - 350f) / 900f);
+                    var rock = Color.Lerp(HillColor[rng.Next(HillColor.Length)], HazeColor, haze * 0.72f);
+                    Place(hills, "Mountain", here, yaw, radius, height,
+                        RidgeMesh(ridge, sides, 0f, 1f, 1f, rng), rock);
 
                     if (rng.NextDouble() < snowChance * drop)
                     {
                         var snowline = 0.56f + (float)rng.NextDouble() * 0.18f;
-                        Place(hills, "Snow", at + jitter, yaw, radius, height,
+                        Place(hills, "Snow", here, yaw, radius, height,
                             // 1.5% outward keeps it clear of the rock it sits on; any less and the
                             // two surfaces z-fight into a shimmering mess at this camera distance.
                             RidgeMesh(ridge, sides, snowline, 1f, 1.015f, rng),
-                            SnowColor);
+                            Color.Lerp(SnowColor, HazeColor, haze * 0.45f));
                     }
                 }
             }
@@ -261,7 +288,10 @@ namespace SmartTraffic
             public Ridge(System.Random rng)
             {
                 _freq = new[] { 2 + rng.Next(2), 5 + rng.Next(3), 11 + rng.Next(5), 19 + rng.Next(7) };
-                _amp = new[] { 0.30f, 0.16f, 0.075f, 0.035f };
+                // Roughly half the relief of the first attempt. At 0.30 the base octave moved the
+                // outline by nearly a third of the radius, which reads as a shard rather than as
+                // a mountain; real ranges are mostly mass with detail on top, not detail.
+                _amp = new[] { 0.17f, 0.085f, 0.042f, 0.020f };
                 _phase = new float[4];
                 for (var i = 0; i < 4; i++) _phase[i] = (float)(rng.NextDouble() * Mathf.PI * 2);
             }
@@ -294,15 +324,17 @@ namespace SmartTraffic
         private static Mesh RidgeMesh(Ridge ridge, int sides, float vFrom, float vTo,
             float inflate, System.Random rng)
         {
-            const int rings = 9;
+            const int rings = 14;   // more rings = a smoother profile between base and summit
 
             // Ring 0..rings-1 of positions, then the apex; triangles copy from this grid.
             var grid = new Vector3[rings, sides];
             for (var r = 0; r < rings; r++)
             {
                 var v = Mathf.Lerp(vFrom, vTo, r / (float)(rings - 1));
-                // Concave profile - a wide skirt and steep shoulders, not a cone's straight sides.
-                var ringR = Mathf.Pow(1f - v, 1.42f);
+                // Gentler than the 1.42 first used, and it never reaches zero: a profile that
+                // closes to a point puts a needle on top of every summit. Real peaks are blunt,
+                // and the 0.12 floor is what turns the spike into a summit ridge.
+                var ringR = Mathf.Lerp(Mathf.Pow(1f - v, 1.12f), 0.12f, v * v * 0.55f);
                 for (var s = 0; s < sides; s++)
                 {
                     var a = s / (float)sides * Mathf.PI * 2f;
@@ -367,7 +399,8 @@ namespace SmartTraffic
 
             for (var i = 0; i < 22; i++)
             {
-                var baseY = 160f + (float)rng.NextDouble() * 80f;
+                // Was 160-240, which put them above the top of frame at the demo camera angle.
+                var baseY = 105f + (float)rng.NextDouble() * 70f;
                 var centre = new Vector3(
                     (float)(rng.NextDouble() * 2 - 1) * 520f,
                     baseY,
@@ -378,7 +411,7 @@ namespace SmartTraffic
                 var drift = (float)(rng.NextDouble() * Mathf.PI * 2);
                 var along = new Vector3(Mathf.Cos(drift), 0f, Mathf.Sin(drift));
                 var across = new Vector3(-along.z, 0f, along.x);
-                var spread = 30f + (float)rng.NextDouble() * 34f;
+                var spread = 44f + (float)rng.NextDouble() * 46f;
                 var scale = 0.8f + (float)rng.NextDouble() * 0.7f;
 
                 var puffs = 6 + rng.Next(5);

@@ -188,15 +188,27 @@ namespace SmartTraffic
             for (var i = 0; i < rows.Count; i++)
             {
                 if (!rows[i].Values.TryGetValue(kpi.Key, out var v) || !v.HasValue) continue;
-                var h = (float)(v.Value / max) * (plot.height - 34f);
+                // Leave headroom for the value label above the tallest bar.
+                var h = (float)(v.Value / max) * (plot.height - 62f);
                 var bar = new Rect(plot.x + i * slot + 8f, plot.yMax - 34f - h, slot - 16f, h);
                 var prev = GUI.color;
                 GUI.color = rows[i].IsOurs ? UITheme.Accent : new Color(0.45f, 0.50f, 0.60f, 0.85f);
                 GUI.Box(bar, GUIContent.none, UITheme.Panel);
                 GUI.color = prev;
+
+                // The number, above its own bar. A bar chart with no scale and no labels tells a
+                // viewer which is biggest and nothing else - and "which is biggest" is the one
+                // thing the table already said. The value is the reason to draw it.
+                GUI.Label(new Rect(plot.x + i * slot, bar.y - 28f, slot, 26f),
+                    Format(kpi.Key, v.Value), Centred(UITheme.CellName(rows[i].IsOurs)));
                 GUI.Label(new Rect(plot.x + i * slot, plot.yMax - 30f, slot, 26f),
-                    Shorten(rows[i].Label), UITheme.CellBlurb(rows[i].IsOurs));
+                    Shorten(rows[i].Label), Centred(UITheme.CellBlurb(rows[i].IsOurs)));
             }
+        }
+
+        private static GUIStyle Centred(GUIStyle from)
+        {
+            return new GUIStyle(from) { alignment = TextAnchor.MiddleCenter };
         }
 
         private static string Format(string key, double v)

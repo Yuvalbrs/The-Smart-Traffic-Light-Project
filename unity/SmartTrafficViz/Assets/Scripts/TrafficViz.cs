@@ -462,12 +462,15 @@ namespace SmartTraffic
             // One panel with its own backdrop, laid out from a single origin below the shell's
             // top bar. The previous version scattered labels at hard-coded y values that
             // overlapped the bar and each other.
-            const float top = AppShell.TopBarHeight + 8f;
-            const float pad = 12f, line = 20f;
-            var panel = new Rect(8f, top, 430f, line * 3f + 16f);
+            // 430 x (3*20) held three lines of 13 pt text. At 20 pt the first line ran off the
+            // panel and the third sat on its own bottom edge - visible in the demo as a heading
+            // sliced in half. Width and line height both follow the type now.
+            const float top = AppShell.TopBarHeight + 10f;
+            const float pad = 16f, line = 28f;
+            var panel = new Rect(10f, top, 620f, line * 3f + 26f);
             UITheme.Backdrop(panel);
 
-            var y = panel.y + 8f;
+            var y = panel.y + 12f;
             GUI.Label(new Rect(panel.x + pad, y, panel.width - pad * 2f, line),
                 "ws/unity: " + status, UITheme.Heading);
             y += line;
