@@ -371,6 +371,20 @@ namespace SmartTraffic
             wheel.GetComponent<Renderer>().sharedMaterial = _tyre;
         }
 
+        /// <summary>Return every rendered vehicle to the pool, leaving an empty junction.
+        ///
+        /// The scene holds its LAST frame when a run ends - that is what makes a finished episode
+        /// look identical to a crashed one, cars stopped mid-road with nothing moving. Resetting
+        /// has to clear the picture as well as stop the session, or the next thing the user sees
+        /// is the previous run's traffic sitting on an intersection that is no longer running.
+        ///
+        /// Pooled rather than destroyed: these are the same objects the next episode will reuse.</summary>
+        public void ClearVehicles()
+        {
+            foreach (var kv in _cars) Release(kv.Value.Go);
+            _cars.Clear();
+        }
+
         private void Release(GameObject car)
         {
             car.SetActive(false);
@@ -385,7 +399,11 @@ namespace SmartTraffic
                 var go = new GameObject("Main Camera") { tag = "MainCamera" };
                 cam = go.AddComponent<Camera>();
             }
-            cam.farClipPlane = 1500f;
+            // 2600, not the 1500 this was: the sun/moon disc sits 1250 m out (beyond the far
+            // ridge ring so no peak covers it) and the orbit rig backs off up to MaxDistance
+            // = 700 m from its target, so at full zoom-out the disc is ~1950 m away and a
+            // 1500 m clip plane deletes the sky's only light source.
+            cam.farClipPlane = 2600f;
             // Skybox when the project has one (it does by default), else a daylight-ish solid so
             // the generated hills and clouds still sit against sky rather than a black void.
             cam.clearFlags = RenderSettings.skybox != null

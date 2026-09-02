@@ -29,7 +29,11 @@ namespace SmartTraffic
         public string Scenario;
         public int Seed;
         public bool Gridlocked;
+        // All SEVEN locked KPIs (kpis.md), not the four the replay browser happened to need. The
+        // end-of-episode summary reports the same set the campaign is judged on, so a number read
+        // off that panel and a number read off the results table mean the same thing.
         public double? AvgWait, Throughput, AvgQueue, WaitP95;
+        public double? NumStops, FairnessStd, WorstMovementMaxWait;
     }
 
     public sealed class ModelRow
@@ -83,6 +87,11 @@ namespace SmartTraffic
         public List<RunRow> Runs = new List<RunRow>();
         public List<EpisodeKpiRow> RunKpis = new List<EpisodeKpiRow>();
         public string SelectedRunId;
+        // A panel that cannot tell "still fetching" from "came back empty" eventually shows an
+        // empty table over live data - this project's most expensive recurring defect.
+        public bool RunKpisLoading;
+        public string RunKpisError;
+        public bool CompareLoading;
         public List<ModelRow> Models = new List<ModelRow>();
         public List<CompareKpi> CompareKpis = new List<CompareKpi>();
         public List<CompareRow> CompareRows = new List<CompareRow>();
@@ -146,10 +155,19 @@ namespace SmartTraffic
         {
             SelectedRunId = runId;
             RunKpis = new List<EpisodeKpiRow>();
+            RunKpisLoading = true;
+            RunKpisError = null;
             try
             {
                 var resp = await Http.GetAsync(_base + "/runs/" + Uri.EscapeDataString(runId) + "/kpis");
-                if (!resp.IsSuccessStatusCode) return;
+                if (!resp.IsSuccessStatusCode)
+                {
+                    // Was a bare `return`, which left an empty table and no explanation: the
+                    // failure was indistinguishable from a run that genuinely had no episodes.
+                    RunKpisError = Detail(await resp.Content.ReadAsStringAsync());
+                    RunKpisLoading = false;
+                    return;
+                }
                 var o = JObject.Parse(await resp.Content.ReadAsStringAsync());
                 var rows = new List<EpisodeKpiRow>();
                 foreach (var r in o["rows"] ?? new JArray())
@@ -163,11 +181,15 @@ namespace SmartTraffic
                         Throughput = (double?)r["throughput"],
                         AvgQueue = (double?)r["avg_queue_length"],
                         WaitP95 = (double?)r["wait_p95"],
+                        NumStops = (double?)r["num_stops"],
+                        FairnessStd = (double?)r["fairness_std"],
+                        WorstMovementMaxWait = (double?)r["worst_movement_max_wait"],
                     });
                 }
                 RunKpis = rows;
             }
-            catch (Exception exc) { LastError = exc.Message; }
+            catch (Exception exc) { LastError = exc.Message; RunKpisError = exc.Message; }
+            finally { RunKpisLoading = false; }
         }
 
         // ------------------------------------------------------------------ models
@@ -318,6 +340,7 @@ namespace SmartTraffic
         public async void RefreshComparison(string scenario)
         {
             CompareError = null;
+            CompareLoading = true;
             try
             {
                 var resp = await Http.GetAsync(_base + "/comparison?scenario=" + Uri.EscapeDataString(scenario));
@@ -365,6 +388,9 @@ namespace SmartTraffic
                 CompareNote = (string)o["note"];
             }
             catch (Exception exc) { CompareError = exc.Message; }
+            // finally, not a line before each return: the not-success branch returns early, and a
+            // flag left true there would pin the panel on "loading" forever.
+            finally { CompareLoading = false; }
         }
 
         // ------------------------------------------------------------------ helpers

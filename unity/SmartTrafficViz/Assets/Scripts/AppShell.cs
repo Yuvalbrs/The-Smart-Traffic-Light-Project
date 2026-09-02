@@ -26,6 +26,10 @@ namespace SmartTraffic
         private TrainScreen _train;
         private CompareScreen _compare;
         private HubApi _api;
+        private EpisodeSummary _summary;
+        // The previous poll's state. The end of a run is a TRANSITION, and polling for the
+        // string "finished" would re-open the panel every second until the next episode starts.
+        private string _prevSessionState = "unknown";
         private Camera _menuCam;
         private SessionControl _session;
         private RunConfig _cfg = RunConfig.Default;
@@ -41,6 +45,7 @@ namespace SmartTraffic
             // scene list the dashboard offers must be the same lists, fetched once.
             _api = new HubApi(HubUrl);
             _api.RefreshControllers();
+            _summary = new EpisodeSummary(_api);
         }
 
         private void Update()
@@ -56,6 +61,33 @@ namespace SmartTraffic
                 {
                     if (_viz != null) _viz.SessionState = _session.State;
                     if (_dash != null) _dash.SessionState = _session.State;
+
+                    // The end of an episode, caught as an edge rather than a level. Only from a
+                    // state that was actually RUNNING: on a cold start the hub reports the LAST
+                    // session, and levelling on "finished" would greet the user with a summary of
+                    // a run from yesterday before they had started anything.
+                    var now = _session.State;
+                    var ended = now == "finished" || now == "stopped" || now == "failed";
+                    var wasRunning = _prevSessionState == "running" || _prevSessionState == "starting";
+
+                    // Captured on ANY screen, not only Live. An episode that finishes while the
+                    // user is reading the dashboard still produced results, and the summary is
+                    // waiting for them when they come back to the picture. Drawing is gated to
+                    // Live separately - capture and display are different decisions.
+                    if (ended && wasRunning && _summary != null)
+                    {
+                        _summary.Show(_session.RunId, _session.RunningScenario,
+                                      _session.RunningController, _session.Seed,
+                                      _session.SimTime, now);
+                    }
+
+                    // A new run retires the old summary. Without this, starting the next episode
+                    // leaves the previous run's numbers sitting over live traffic - the exact
+                    // "correct data made to look like other data" defect this project has already
+                    // paid for twice.
+                    if (now == "running" || now == "starting") _summary?.Hide();
+
+                    _prevSessionState = now;
                 }
             }
 
@@ -65,6 +97,7 @@ namespace SmartTraffic
             // not inside OnGUI - OnGUI runs several times per frame for layout and events.
             _dash?.Tick();
             _train?.Tick();
+            _summary?.Tick();
 
             // D toggles straight between the picture and the numbers, so a demo can move between
             // them without going back out to the menu each time.
@@ -161,6 +194,13 @@ namespace SmartTraffic
                 case Screen.Train: DrawTrain(); break;
                 case Screen.Compare: DrawCompare(); break;
                 case Screen.Live: DrawLiveBar(); break;
+            }
+
+            // Last, so it sits over the live HUD rather than under it - and only on Live, so it
+            // can never cover the training curve or the comparison table.
+            if (Current == Screen.Live)
+            {
+                _summary?.Draw(new Rect(0f, 0f, UnityEngine.Screen.width, UnityEngine.Screen.height));
             }
         }
 
@@ -347,7 +387,8 @@ namespace SmartTraffic
         {
             var w = UnityEngine.Screen.width;
             UITheme.Backdrop(new Rect(0f, 0f, w, TopBarHeight));
-            GUI.Label(new Rect(20f, 20f, 620f, 26f),
+            // 26f clipped the descender of "dqn-plain" - Heading is 20 pt bold and does not fit.
+            GUI.Label(new Rect(20f, 18f, 620f, UITheme.LineH(UITheme.Heading)),
                 "SMART TRAFFIC   -   " + _cfg.Scenario + "  /  " + _cfg.Controller, UITheme.Heading);
 
             // The 3-D view had no way out to the numbers except the D key, which nobody discovers
@@ -378,6 +419,18 @@ namespace SmartTraffic
                     _overlay ? UITheme.ButtonOn : UITheme.Button))
             {
                 _overlay = !_overlay;
+            }
+
+            // Stop AND clear, as one action. Stopping alone leaves the junction full of the
+            // previous run's traffic, which is the state that makes "did it finish or did it
+            // break?" unanswerable at a glance.
+            x -= 130f + gap;
+            if (GUI.Button(new Rect(x, by, 130f, bh), "Reset", UITheme.Button))
+            {
+                _session?.Stop();
+                _viz?.ClearVehicles();
+                _summary?.Hide();
+                _prevSessionState = "stopped";   // a reset is not an episode ending; no summary
             }
 
             x -= 150f + gap;
