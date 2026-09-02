@@ -338,7 +338,10 @@ namespace SmartTraffic
 
             if (RunSetupUI.Draw(box, ref _cfg, _session, showStop: true)) RunAndWatch();
 
-            if (GUI.Button(new Rect(box.x, box.yMax + 8f, 130f, 30f), "Back", UITheme.Button))
+            // 30f squeezed an 18 pt bold label with 11 px of vertical padding into a box that
+            // could not hold it, so "Back" was clipped top and bottom. LineH asks the style.
+            if (GUI.Button(new Rect(box.x, box.yMax + 8f, 130f, UITheme.LineH(UITheme.Button)),
+                    "Back", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
@@ -461,7 +464,8 @@ namespace SmartTraffic
 
         private void BackButton(Rect box)
         {
-            if (GUI.Button(new Rect(box.x + 24f, box.yMax - 48f, 130f, 32f), "Back", UITheme.Button))
+            if (GUI.Button(new Rect(box.x + 24f, box.yMax - 48f, 130f, UITheme.LineH(UITheme.Button)),
+                    "Back", UITheme.Button))
             {
                 Go(Screen.Menu);
             }

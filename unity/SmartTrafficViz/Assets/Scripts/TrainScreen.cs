@@ -200,13 +200,13 @@ namespace SmartTraffic
             // A stepper, not eleven buttons: at this width each button was a few pixels wide and
             // the labels were unreadable.
             GUI.Label(new Rect(x, row + 6f, 130f, 30f), "scenario", UITheme.Label);
-            if (GUI.Button(new Rect(x + 130f, row, 52f, 38f), "<", UITheme.Button))
+            if (GUI.Button(new Rect(x + 130f, row, 52f, UITheme.LineH(UITheme.Button)), "<", UITheme.Button))
             {
                 _evalScenario = (_evalScenario - 1 + scenarios.Count) % scenarios.Count;
             }
             GUI.Label(new Rect(x + 186f, row, 190f, 38f), scenarios[_evalScenario],
                 CentredLabel());
-            if (GUI.Button(new Rect(x + 376f, row, 52f, 38f), ">", UITheme.Button))
+            if (GUI.Button(new Rect(x + 376f, row, 52f, UITheme.LineH(UITheme.Button)), ">", UITheme.Button))
             {
                 _evalScenario = (_evalScenario + 1) % scenarios.Count;
             }
@@ -216,13 +216,13 @@ namespace SmartTraffic
 
             var ev = _api.Evaluation;
             var busy = ev != null && ev.Running;
-            if (GUI.Button(new Rect(x + 660f, row, 230f, 38f),
+            if (GUI.Button(new Rect(x + 660f, row, 230f, UITheme.LineH(UITheme.Button)),
                     busy ? "evaluating..." : "Run evaluation",
                     busy ? UITheme.ButtonOff : UITheme.Button) && !busy)
             {
                 _api.StartEvaluation(_evalFor, scenarios[_evalScenario], _evalSeeds);
             }
-            if (GUI.Button(new Rect(x + 906f, row, 130f, 38f), "Close", UITheme.Button))
+            if (GUI.Button(new Rect(x + 906f, row, 130f, UITheme.LineH(UITheme.Button)), "Close", UITheme.Button))
             {
                 _evalFor = null;
             }

@@ -317,7 +317,7 @@ namespace SmartTraffic
                 }
             }
 
-            if (GUI.Button(new Rect(x, y, 260f, 38f),
+            if (GUI.Button(new Rect(x, y, 260f, UITheme.LineH(UITheme.Button)),
                     _showReplay ? "Hide recorded runs" : "Show recorded runs", UITheme.Button))
             {
                 _showReplay = !_showReplay;
@@ -327,14 +327,16 @@ namespace SmartTraffic
             if (!_showReplay || Api == null) return y;
 
             var listH = 150f;
+            var rowH = UITheme.LineH(UITheme.Button);   // 30f clipped these the same way
+            var pitch = rowH + 4f;
             var view = new Rect(x, y, w * 0.52f, listH);
-            var content = new Rect(0f, 0f, view.width - 20f, Api.Runs.Count * 32f + 4f);
+            var content = new Rect(0f, 0f, view.width - 20f, Api.Runs.Count * pitch + 4f);
             _runScroll = GUI.BeginScrollView(view, _runScroll, content);
             for (var i = 0; i < Api.Runs.Count; i++)
             {
                 var run = Api.Runs[i];
                 var on = run.RunId == Api.SelectedRunId;
-                if (GUI.Button(new Rect(0f, i * 32f, content.width, 30f),
+                if (GUI.Button(new Rect(0f, i * pitch, content.width, rowH),
                         run.Name + "   " + run.Mode + "   " + run.CreatedAt,
                         on ? UITheme.ButtonOn : UITheme.Button))
                 {
