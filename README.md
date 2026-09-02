@@ -11,27 +11,118 @@ Positioned as **replication-plus-adaptation** of MPLight (Chen et al., 2020) —
 > [`docs/README.md`](docs/README.md). Everything the code *reads at runtime* ships here —
 > `config/movements.yaml` is the movement/phase spec, and a clone is self-contained.
 
-## Run it
+## How to run it
+
+There are three ways in. Pick the first one that matches you.
+
+---
+
+### A. "I just want to see it work" — download the release
+
+No Python, no build. **Windows only.**
+
+1. Go to the [latest release](https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/latest).
+2. Download **`SmartTrafficViz-win64.zip`** and extract it anywhere.
+3. Run `unity/SmartTrafficViz/Build/SmartTrafficViz.exe`.
+
+Windows will warn that the publisher is unknown — the executable is unsigned. Choose
+*More info* -> *Run anyway*.
+
+**Important:** the 3-D client is a *viewer*. On its own it draws the junction and reports
+`connecting`, because the simulation itself runs in the Python hub. For traffic to appear you need
+option B or C running as well.
+
+---
+
+### B. Run the whole thing from source (the normal way)
+
+**You need:** Windows, Python 3.11+, Node.js, and SUMO 1.20+ with `SUMO_HOME` set.
 
 ```bash
-run_app.bat            # builds the UI if needed, starts the hub, opens the dashboard
+git clone https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project.git
+cd The-Smart-Traffic-Light-Project
+
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Then open the **Live** tab and press *start session*. Three tabs: **Live** (watch an episode
-stream at 1 Hz), **Train** (train a controller and watch its reward curve), **Compare**
-(every controller's KPIs on shared seeds). A Unity 3-D client renders the same live episode —
-see [`unity/README.md`](unity/README.md).
+Then add the data and the trained models. **These are not in git** — a 7 MB database and 20 MB of
+model weights do not belong in a repository — so they ship as release assets. Download these from
+the [latest release](https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/latest)
+and extract each one **in the repository root**:
 
-Prerequisites: Python 3.11+, SUMO 1.20+ with `SUMO_HOME` set, Node.js, and `torch`
-(installed separately — see [Setup](#setup)). Without the trained checkpoints (gitignored, see
-below) the three **baseline** controllers still run; the DQN controllers need either the
-checkpoint download or a training run from the Train tab.
+| Asset | Without it |
+|---|---|
+| `traffic-db.zip` | the Compare tab is empty |
+| `checkpoints.zip` | no AI controllers — only Webster, max-pressure and actuated |
+| `external-data.zip` | the real-measured-demand scenario cannot be rebuilt |
+| `SmartTrafficViz-win64.zip` | no 3-D viewer |
+
+Now start it:
+
+```bash
+run_app.bat
+```
+
+That builds the dashboard if needed, starts the hub, and opens the browser at
+**http://localhost:8000**.
+
+**To watch an episode:** open **Live**, choose a scene and a controller, press **RUN**. A speed of
+`5x` is a good default — a full episode is one simulated hour, so `1x` really does take an hour.
+Press **Reset** to stop a run and clear the junction.
+
+When the episode ends you get a **Simulation complete** panel with that run's seven KPIs, and — on
+scenes SCN-01 to SCN-05 — a button to compare it against the recorded campaign.
+
+**For the 3-D view:** with the hub running, launch
+`unity/SmartTrafficViz/Build/SmartTrafficViz.exe`. It connects to the hub automatically.
+
+---
+
+### C. Run the backend in Docker
+
+Everything except the 3-D client, in one command. Needs Docker Desktop running.
+
+```bash
+docker compose up --build
+```
+
+Then open **http://localhost:8000**. First build takes 5-15 minutes; after that it is seconds.
+Full details in [`README-docker.md`](README-docker.md).
+
+---
+
+### One rule: never run B and C at the same time
+
+Both write the same `data/traffic.db`, and on Windows the Docker bind mount cannot share a SQLite
+file with the host. If you open the database from the host while the container is running, the
+container's handle goes stale and **every** later write fails — episodes still run and still
+stream, they simply never get recorded, and they vanish from the archive.
+
+Use `run_app.bat` **or** `docker compose up`. If writes have already started failing,
+`docker compose restart hub` fixes it; nothing is corrupted.
+
+---
+
+### Quick reference
+
+```bash
+run_app.bat                                        # everything, one double-click
+docker compose up --build                          # the backend, containerised
+
+LIBSUMO_AS_TRACI=1 .venv/Scripts/python -m pytest -q          # 432 tests, ~90 s
+.venv/Scripts/python -m scripts.train_dqn --seed 42 --variant plain --run-dir runs/mine
+```
+
+`LIBSUMO_AS_TRACI=1` matters: without it SUMO falls back to a socket client that is roughly ten
+times slower.
 
 ## Status
 
 **Complete.** Simulator, DQN training stack, frozen-LSTM forecaster, three baselines, evaluation
 campaign, statistical analysis, FastAPI hub, React dashboard and Unity 3-D client are all built
-and tested (**390 tests**).
+and tested (**432 tests**).
 
 ### Results
 
@@ -80,10 +171,14 @@ tests/           295 tests
 ## Requirements
 
 - **Python 3.11+**
-- **SUMO 1.20+** with `SUMO_HOME` set and `sumo`/`sumo-gui`/`netconvert` on `PATH`
-  (verified locally: SUMO 1.27.0, `SUMO_HOME=C:\Program Files (x86)\Eclipse\Sumo`).
-  A native install, not a pip package: `netconvert` runs on every session start and has no
-  wheel. `pip install libsumo` alone is not enough.
+- **SUMO 1.20+** — the *binaries*, not only the Python bindings. `netconvert` really does run
+  on every live session start (`src/api/live.py` calls `build_net`) and `sumo` is resolved
+  through `sumolib.checkBinary`, so `pip install libsumo` alone is **not** enough.
+  Either of these works:
+  - a native install, with `SUMO_HOME` set and the binaries on `PATH` (verified locally:
+    SUMO 1.27.0, `SUMO_HOME=C:\Program Files (x86)\Eclipse\Sumo`); or
+  - `pip install eclipse-sumo==1.27.0`, which ships `sumo` and `netconvert` itself. That is
+    what the Docker image uses, and it runs full episodes with no native SUMO installed.
 - **Node.js 18+** — the dashboard is built from source; `frontend/dist/` is not committed.
 - **torch** — deliberately absent from `requirements.txt` so the CPU/CUDA choice stays yours.
   See [GPU / torch](#gpu--torch-do-this-deliberately-later). Required by every DQN controller.
