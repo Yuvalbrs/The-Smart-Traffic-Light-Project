@@ -24,10 +24,32 @@ namespace SmartTraffic
         private static readonly List<Renderer> LampGlass = new List<Renderer>();
         private static Material _lampOn, _lampOff;
 
+        // The visible disc in the sky. The directional light on its own lights the scene from
+        // nowhere: every face is correctly lit and the sky it is lit from is empty, which reads as
+        // a missing object rather than as midday.
+        private static Transform _body;
+        private static Renderer _bodyRenderer;
+        private static Material _sunMat, _moonMat;
+
+        /// <summary>How far out the disc sits. Beyond the far ridge ring - which reaches 940 m,
+        /// so no peak can stand in front of it - and inside the camera's 2600 m far clip, which
+        /// was widened from 1500 m for exactly this reason (see TrafficViz.EnsureCamera).</summary>
+        private const float BodyDistance = 1250f;
+        private const float SunRadius = 55f;
+        private const float MoonRadius = 44f;
+
+        private static readonly Color SunDisc = new Color(1.00f, 0.93f, 0.72f);
+        private static readonly Color MoonDisc = new Color(0.86f, 0.89f, 0.97f);
+
         // Midday: a high, slightly warm sun over a blue sky.
-        private static readonly Color DaySun = new Color(1.00f, 0.97f, 0.90f);
-        private static readonly Color DayAmbient = new Color(0.42f, 0.45f, 0.50f);
-        private static readonly Color DaySky = new Color(0.42f, 0.58f, 0.75f);
+        //
+        // Ambient is the number that decides whether the scene reads as noon or as overcast dusk.
+        // It fills every face the key light does not reach, so raising ONLY the sun leaves the
+        // shadow side exactly as dark and just blows out the lit side. This was 0.42/0.45/0.50 -
+        // a dim sky-bounce - and the junction read as permanently shadowed even at midday.
+        private static readonly Color DaySun = new Color(1.00f, 0.97f, 0.91f);
+        private static readonly Color DayAmbient = new Color(0.64f, 0.67f, 0.72f);
+        private static readonly Color DaySky = new Color(0.52f, 0.69f, 0.87f);
 
         // Night: a dim blue "moon" from the opposite side. Not black - a scene with no fill light
         // reads as a bug, and the audience still has to be able to see the road.
@@ -39,6 +61,8 @@ namespace SmartTraffic
         public static void Reset()
         {
             _sun = null;
+            _body = null;
+            _bodyRenderer = null;
             Lamps.Clear();
             LampGlass.Clear();
         }
@@ -46,6 +70,14 @@ namespace SmartTraffic
         public static void RegisterSun(Light sun)
         {
             _sun = sun;
+            Apply();
+        }
+
+        /// <summary>The sphere that stands in for the sun by day and the moon by night.</summary>
+        public static void RegisterBody(Transform body, Renderer renderer)
+        {
+            _body = body;
+            _bodyRenderer = renderer;
             Apply();
         }
 
@@ -67,15 +99,42 @@ namespace SmartTraffic
         {
             RenderSettings.ambientLight = IsNight ? NightAmbient : DayAmbient;
 
+            // ONE rotation drives both the light and the disc, so the sun can never be drawn in a
+            // quarter of the sky the shadows say it is not in. Low from the opposite quarter at
+            // night, so the long shadows read as moonlight rather than as the sun having simply
+            // dimmed in place - but 30 deg, not the 24 deg this used before the disc existed: the
+            // far ridge ring tops out at ~24 deg of elevation, and a moon on that vector sat in
+            // the mountains instead of above them.
+            var rotation = IsNight
+                ? Quaternion.Euler(30f, 205f, 0f)
+                : Quaternion.Euler(52f, 35f, 0f);
+
             if (_sun != null)
             {
                 _sun.color = IsNight ? NightSun : DaySun;
-                _sun.intensity = IsNight ? 0.32f : 1.05f;
-                // Low from the opposite quarter at night, so the long shadows read as moonlight
-                // rather than as the sun having simply dimmed in place.
-                _sun.transform.rotation = IsNight
-                    ? Quaternion.Euler(24f, 205f, 0f)
-                    : Quaternion.Euler(52f, 35f, 0f);
+                _sun.intensity = IsNight ? 0.32f : 1.30f;
+                _sun.transform.rotation = rotation;
+
+                // A fully opaque cast shadow is the other half of "too shadowy": at noon the sky
+                // is a huge second source, so real daylight shadows are filled in, not black.
+                // Softening the shadow keeps the shape - which is what makes the 3-D read - while
+                // letting the road surface under a signal head stay legible.
+                _sun.shadowStrength = IsNight ? 0.80f : 0.50f;
+            }
+
+            if (_body != null)
+            {
+                // The disc belongs where the light comes FROM. A directional light travels along
+                // its own forward vector, so the source is at -forward.
+                _body.position = -(rotation * Vector3.forward) * BodyDistance;
+                var d = (IsNight ? MoonRadius : SunRadius) * 2f;
+                _body.localScale = new Vector3(d, d, d);
+            }
+
+            EnsureBodyMaterials();
+            if (_bodyRenderer != null)
+            {
+                _bodyRenderer.sharedMaterial = IsNight ? _moonMat : _sunMat;
             }
 
             var cam = Camera.main;
@@ -95,6 +154,25 @@ namespace SmartTraffic
             {
                 if (glass != null) glass.sharedMaterial = IsNight ? _lampOn : _lampOff;
             }
+        }
+
+        private static void EnsureBodyMaterials()
+        {
+            // Same lifetime problem as the lamp materials: these statics outlive Play mode but the
+            // Materials they point at do not.
+            if (_sunMat != null && _moonMat != null) return;
+            var shader = IntersectionScene.LitShader;
+            if (shader == null) return;
+
+            // Emissive, because the disc is a light source: lit normally it would be shaded by the
+            // very light it represents, and the half facing the scene would be dark.
+            _sunMat = new Material(shader) { color = SunDisc };
+            _sunMat.EnableKeyword("_EMISSION");
+            _sunMat.SetColor("_EmissionColor", SunDisc * 3.0f);
+
+            _moonMat = new Material(shader) { color = MoonDisc };
+            _moonMat.EnableKeyword("_EMISSION");
+            _moonMat.SetColor("_EmissionColor", MoonDisc * 1.6f);
         }
 
         private static void EnsureLampMaterials()

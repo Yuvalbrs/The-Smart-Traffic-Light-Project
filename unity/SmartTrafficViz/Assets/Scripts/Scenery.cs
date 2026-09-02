@@ -108,6 +108,34 @@ namespace SmartTraffic
             BuildTrees(root, rng);
             BuildHills(root, rng);
             BuildClouds(root, rng);
+            BuildCelestialBody(root);
+        }
+
+        /// <summary>
+        /// The sun by day, the moon by night - one sphere that DayNight recolours and moves.
+        ///
+        /// It is placed and sized entirely by <see cref="DayNight.Apply"/>, from the same rotation
+        /// that aims the directional light, so the disc and the shadows can never disagree about
+        /// where the light is coming from. Nothing here fixes a position; doing so would create a
+        /// second source of truth for it.
+        /// </summary>
+        private static void BuildCelestialBody(Transform root)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            go.name = "CelestialBody";
+            go.transform.SetParent(root);
+
+            // CreatePrimitive ships a collider nobody asked for. Nothing in this viewer raycasts,
+            // but a 110 m sphere of collider hanging over the scene is a trap for anything that
+            // later does.
+            var collider = go.GetComponent<Collider>();
+            if (collider != null) UnityEngine.Object.Destroy(collider);
+
+            var renderer = go.GetComponent<Renderer>();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+
+            DayNight.RegisterBody(go.transform, renderer);
         }
 
         /// <summary>
