@@ -116,7 +116,7 @@ namespace SmartTraffic
 
         private static GUIStyle _buttonOff, _field, _bad, _good, _wrap;
 
-        private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn;
+        private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn, _cellUser;
 
         private static void EnsureCells()
         {
@@ -146,12 +146,21 @@ namespace SmartTraffic
 
             _cellBlurbOn = new GUIStyle(_cellBlurb);
             _cellBlurbOn.normal.textColor = new Color(0.82f, 0.90f, 1f);
+
+            // In-app models are set in italic instead of being labelled "yours" in every row.
+            // The distinction still has to be visible - they are evaluated on far fewer seeds
+            // and on different code - but a word repeated down a column is noise.
+            _cellUser = new GUIStyle(_cellName) { fontStyle = FontStyle.Italic };
+            _cellUser.normal.textColor = new Color(0.78f, 0.82f, 0.88f);
         }
 
         /// <summary>Left-aligned row cells, so a list of buttons reads as aligned columns.</summary>
         public static GUIStyle CellId(bool on) { EnsureCells(); return on ? _cellIdOn : _cellId; }
         public static GUIStyle CellName(bool on) { EnsureCells(); return on ? _cellNameOn : _cellName; }
         public static GUIStyle CellBlurb(bool on) { EnsureCells(); return on ? _cellBlurbOn : _cellBlurb; }
+
+        /// <summary>Italic row style for a model trained in the app rather than in the campaign.</summary>
+        public static GUIStyle CellUser { get { EnsureCells(); return _cellUser; } }
 
         public static GUIStyle Button { get { Ensure(); return _button; } }
         public static GUIStyle ButtonOn { get { Ensure(); return _buttonOn; } }

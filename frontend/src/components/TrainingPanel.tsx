@@ -516,7 +516,7 @@ export function TrainingPanel() {
                     </td>
                     <td>
                       <span className={"source-badge source-" + m.source}>
-                        {m.source === "user" ? "yours" : "campaign"}
+                        {m.source === "user" ? "in-app" : "campaign"}
                       </span>
                     </td>
                     <td>

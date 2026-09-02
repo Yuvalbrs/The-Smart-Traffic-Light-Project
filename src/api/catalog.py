@@ -48,7 +48,7 @@ KPI_SPEC: tuple[dict[str, Any], ...] = (
 #: Display labels, and which row is the project's own contribution. ``is_ours`` drives a highlight
 #: in the UI - it marks the row, it does not mark it as the winner.
 CONTROLLER_META: dict[str, dict[str, Any]] = {
-    "hybrid": {"label": "DQN + forecast (ours)", "is_ours": True},
+    "hybrid": {"label": "DQN + forecast", "is_ours": True},
     "plain": {"label": "DQN, no forecast", "is_ours": False},
     "random-lstm": {"label": "DQN + random forecast (control)", "is_ours": False},
     "sel/plain": {"label": "DQN with regime selector", "is_ours": True},

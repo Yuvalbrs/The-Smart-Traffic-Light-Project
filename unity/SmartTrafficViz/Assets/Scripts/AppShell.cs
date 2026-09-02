@@ -304,20 +304,38 @@ namespace SmartTraffic
             }
         }
 
+        private Vector2 _aboutScroll;
+
         private void DrawAbout()
         {
             MenuBackdrop.Draw();
-            var box = Sheet(560f, 300f, "About");
-            var y = box.y + 74f;
-            GUI.Label(new Rect(box.x + 24f, y, box.width - 48f, 170f),
+            // Taller, and scrolled. At 560x300 with the larger type the last paragraph and the
+            // whole keyboard list were simply unreachable - text that exists and cannot be read.
+            var box = Sheet(820f, 560f, "About");
+            const string body =
                 "Renders a live SUMO episode from the hub's ws/unity channel at 1 Hz, with " +
                 "client-side interpolation between frames.\n\n" +
                 "The intersection, signals and scenery are generated at runtime from " +
                 "config/network/intersection.*, so what you see cannot drift from the network " +
                 "being simulated.\n\n" +
                 "Each approach carries three signal heads because left, through and right are " +
-                "independently controlled - those twelve movements are the agent's action space.",
-                Wrapped(UITheme.Label));
+                "independently controlled - those twelve movements are the agent's action space." +
+                "\n\n" +
+                "Keyboard\n" +
+                "  D      switch between the 3-D view and the dashboard\n" +
+                "  Tab    open the scene picker over the 3-D view\n" +
+                "  Esc    close the picker, then leave the screen\n" +
+                "  F      free camera; Esc returns to orbit\n" +
+                "  1-6    camera presets\n" +
+                "  wheel  zoom, right-drag orbit, middle-drag pan";
+
+            var view = new Rect(box.x + 24f, box.y + 78f, box.width - 48f, box.height - 150f);
+            var style = Wrapped(UITheme.Label);
+            var height = style.CalcHeight(new GUIContent(body), view.width - 24f);
+            _aboutScroll = GUI.BeginScrollView(view, _aboutScroll,
+                new Rect(0f, 0f, view.width - 24f, height));
+            GUI.Label(new Rect(0f, 0f, view.width - 24f, height), body, style);
+            GUI.EndScrollView();
             BackButton(box);
         }
 

@@ -116,7 +116,7 @@ namespace SmartTraffic
                 }
 
                 GUI.Label(new Rect(rr.x + 8f, rr.y, nameW, rowH),
-                    row.Label + (row.IsUserModel ? "  [yours]" : ""), UITheme.CellName(row.IsOurs));
+                    row.Label, row.IsUserModel ? UITheme.CellUser : UITheme.CellName(row.IsOurs));
                 GUI.Label(new Rect(rr.x + nameW, rr.y, 120f, rowH),
                     row.Episodes + "  (" + (row.GridlockRate * 100d).ToString("0") + "% gridlock)",
                     UITheme.CellBlurb(false));
@@ -135,6 +135,12 @@ namespace SmartTraffic
             }
             GUI.EndScrollView();
             y += listH + 10f;
+
+            GUI.Label(new Rect(x, y, w, 26f),
+                "Highlighted row: this project's controller.   Rows in italic type were trained "
+                + "in this app and are shown for comparison only - they never win a column.",
+                UITheme.Hint);
+            y += 30f;
 
             // --- the honest note ------------------------------------------------------
             if (!string.IsNullOrEmpty(_api.CompareNote))

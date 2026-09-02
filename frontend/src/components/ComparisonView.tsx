@@ -129,7 +129,7 @@ export function ComparisonView() {
                     {row.label}
                     {row.is_user_model && (
                       <span className="yours-chip" title="trained inside this app, not part of the pre-registered campaign">
-                        yours
+                        in-app
                       </span>
                     )}
                   </td>

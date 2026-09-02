@@ -134,25 +134,33 @@ namespace SmartTraffic
                 var colour = Foliage[rng.Next(Foliage.Length)];
                 var at = new Vector3(x, 0f, z);
 
-                // Trunk in two narrowing sections - one cylinder is a post, not a trunk.
-                Taper(trees, at, radius * 0.30f, radius * 0.20f, height * 0.34f, 0f);
-                Taper(trees, at, radius * 0.20f, radius * 0.13f, height * 0.26f, height * 0.34f);
+                // The trunk stops INSIDE the crown, and the crown is guaranteed to cover the
+                // top of it. Before, the trunk topped out near the crown's underside and the
+                // crown's lobes were free to sit off to one side, so a bare stub showed through
+                // the leaves - a tree with a branch growing out of the middle of its foliage.
+                var crownY = height * 0.66f;
+                Taper(trees, at, radius * 0.26f, radius * 0.17f, crownY * 0.55f, 0f);
+                Taper(trees, at, radius * 0.17f, radius * 0.11f, crownY * 0.55f, crownY * 0.55f);
 
                 if (rng.NextDouble() < 0.45)
                 {
-                    var count = 3 + rng.Next(3);
+                    var crownR = radius * (1.9f + (float)rng.NextDouble() * 0.7f);
+                    var count = 4 + rng.Next(3);
                     var lobes = new Blob.Lobe[count];
-                    for (var l = 0; l < count; l++)
+                    // Lobe 0 is centred, so the crown always encloses the trunk line whatever the
+                    // others do. The rest are kept within half a radius of it.
+                    lobes[0] = new Blob.Lobe(Vector3.zero, crownR);
+                    for (var l = 1; l < count; l++)
                     {
                         lobes[l] = new Blob.Lobe(
-                            new Vector3((float)(rng.NextDouble() - 0.5) * radius * 1.5f,
-                                (float)(rng.NextDouble() - 0.5) * radius * 1.1f,
-                                (float)(rng.NextDouble() - 0.5) * radius * 1.5f),
-                            radius * (1.05f + (float)rng.NextDouble() * 0.55f));
+                            new Vector3((float)(rng.NextDouble() - 0.5) * crownR * 0.55f,
+                                (float)(rng.NextDouble() - 0.5) * crownR * 0.45f,
+                                (float)(rng.NextDouble() - 0.5) * crownR * 0.55f),
+                            crownR * (0.62f + (float)rng.NextDouble() * 0.28f));
                     }
                     var crown = new GameObject("Crown");
                     crown.transform.SetParent(trees);
-                    crown.transform.position = at + Vector3.up * (height * 0.72f);
+                    crown.transform.position = at + Vector3.up * (crownY + crownR * 0.45f);
                     crown.transform.rotation = Quaternion.Euler(0f, (float)rng.NextDouble() * 360f, 0f);
                     crown.AddComponent<MeshFilter>().sharedMesh = Blob.Build(
                         lobes, rings: 8, sectors: 12, flatBase: -999f, smooth: false,
@@ -164,9 +172,9 @@ namespace SmartTraffic
 
                 // Conifer in three tiers, each narrower, so the outline steps instead of being
                 // one long triangle.
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.34f), radius * 1.25f, height * 0.44f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.56f), radius * 1.00f, height * 0.38f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.76f), radius * 0.70f, height * 0.32f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.26f), radius * 1.35f, height * 0.42f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.48f), radius * 1.05f, height * 0.38f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.70f), radius * 0.72f, height * 0.34f, colour);
             }
         }
 

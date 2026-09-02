@@ -134,9 +134,9 @@ namespace SmartTraffic
             DrawTile(new Rect(x, y, third, h), "avg wait so far",
                 $"{f.RunningKpis.AvgWaitSoFar:0.0} s");
             DrawTile(new Rect(x + third + 12f, y, third, h), "throughput so far",
-                $"{f.RunningKpis.ThroughputSoFar:0} veh/h");
+                $"{f.RunningKpis.ThroughputSoFar:0} vehicles/h");
             DrawTile(new Rect(x + (third + 12f) * 2f, y, third, h), "queue now",
-                $"{f.RunningKpis.CurrentQueueTotal:0} veh");
+                $"{f.RunningKpis.CurrentQueueTotal:0} vehicles");
             GUI.Label(new Rect(x, y + h + 6f, w, 22f),
                 "Running estimates, not the confirmatory KPIs - those come from trip-info after "
                 + "the episode ends.", UITheme.Hint);

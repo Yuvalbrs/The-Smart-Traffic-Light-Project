@@ -154,8 +154,9 @@ namespace SmartTraffic
             {
                 var m = _api.Models[i];
                 var r = new Rect(0f, i * rowH, content.width, rowH - 4f);
+                // No "[yours]" here: the source column two cells along already says "user".
                 GUI.Label(new Rect(r.x + 6f, r.y, r.width * 0.42f, r.height),
-                    m.Label + (m.IsUser ? "   [yours]" : ""), UITheme.CellName(m.IsUser));
+                    m.Label, UITheme.CellName(m.IsUser));
                 GUI.Label(new Rect(r.x + r.width * 0.44f, r.y, 160f, r.height),
                     m.EpisodesTrained + "/" + m.Episodes, UITheme.CellBlurb(false));
                 GUI.Label(new Rect(r.x + r.width * 0.58f, r.y, 160f, r.height),
