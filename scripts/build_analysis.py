@@ -3,7 +3,7 @@
 Separable, importable analysis+plotting module. T-04-02's DoD requires that the
 plotting/table-generation code live outside the notebook, so a plotting break at write-up time has
 a recovery path instead of a buried blob. Every number in this module is produced by the LOCKED
-statistical core in ``scripts.analyze_eval`` (imported, never reimplemented): ``_pairs``,
+statistical core in ``scripts.analyze_eval`` (imported, never reimplemented): ``_series``,
 ``_wilcoxon``, ``_holm``, ``_index``, ``_eval_seeds``, ``_num``, ``_load``, plus the module
 constants ``TRAIN_SEEDS``, ``KPIS``, ``HEADLINE``, ``ALPHA``.
 
@@ -43,10 +43,12 @@ from scripts.analyze_eval import (
     _holm,
     _index,
     _load,
+    _effective_n,
     _num,
-    _pairs,
+    _series,
     _stars,
     _wilcoxon,
+    min_testable_n,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -57,9 +59,13 @@ _SEL_PLAIN_LOG = _REPO_ROOT / "runs" / "compare_sel_plain.log"
 _OUT_DIR = _REPO_ROOT / "data" / "eval" / "analysis"
 
 TEST_SCENARIO = "SCN-05"
-from src.provenance.official import official_lstm_version
+from src.provenance.official import official_lstm_versions
 
-DEPLOYED_LSTM_VERSION = official_lstm_version()  # derived, never hand-pinned
+# A6.4 deploys one forecaster PER DQN training seed, so "the deployed version" is no longer a
+# single string. Derived, never hand-pinned. The inverse map answers the question the T3 table
+# actually asks of each report row: "was this one deployed, and if so with which seed?"
+DEPLOYED_LSTM_VERSIONS = official_lstm_versions()          # {seed: "lstm-<hash>"}
+DEPLOYED_SEED_BY_VERSION = {v: k for k, v in DEPLOYED_LSTM_VERSIONS.items()}
 HEADLINE_VARIANTS = ("hybrid", "plain", "random-lstm")
 BASELINE_ALGOS = ("webster", "max_pressure", "actuated")
 # Display order + labels for T1/T2 rows (baselines first, then the 3 DQN variants).
@@ -120,9 +126,14 @@ def _fmt_cell(stats: dict) -> str:
 
 
 # --------------------------------------------------------------------------------------------
-# Confirmatory Holm-Bonferroni families (C1/C2/C3, SCN-05 only) - reuses _pairs/_wilcoxon/_holm
+# Confirmatory Holm-Bonferroni families (C1/C2/C3, SCN-05 only) - reuses _series/_wilcoxon/_holm
 # unmodified. This is the single source of truth for every "significant yes/no" claim in the
 # report; T1/T2 annotate their SCN-05 columns from these DataFrames rather than recomputing.
+#
+# Amended 2026-09-01 (prereg A1/A2/A3): n is the EVAL-SEED count (train seeds are averaged into
+# the value, not counted as replication); censoring is handled by worst-rank imputation with a
+# complete-case sensitivity analysis carried alongside in the same frame; a test that cannot
+# reject under any data is flagged UNDECIDABLE and leaves the family.
 # --------------------------------------------------------------------------------------------
 
 
@@ -134,16 +145,27 @@ def build_confirmatory_family(
 ) -> pd.DataFrame:
     """One Holm family: ``a_variant`` vs each of ``comparisons`` on the 7 KPIs.
 
-    ``comparisons`` is a list of ``(b_name, b_is_dqn, label)``, matching ``scripts.analyze_eval._pairs``.
-    Returns one row per (KPI, comparison) with the raw p, Holm-adjusted p, and the effect size.
+    ``comparisons`` is a list of ``(b_name, b_is_dqn, label)``, matching ``scripts.analyze_eval._series``.
+    Returns one row per (KPI, comparison) carrying BOTH pre-registered analyses: the primary
+    (worst-rank imputation, A2.2) and the complete-case sensitivity analysis, plus an ``agrees``
+    column. Where they disagree, the disagreement is the reported result - never a choice.
     """
     dqn, base = _index(rows)
     es = _eval_seeds(rows, scenario)
+    prereg_m = len(KPIS) * len(comparisons)
+    floor_n = min_testable_n(prereg_m)  # A1.3/A3: below this, no data can reject
     records = []
     for kpi_col, kpi_label, direction in KPIS:
         for b_name, b_is_dqn, blabel in comparisons:
-            a, b, dropped = _pairs(dqn, base, es, scenario, kpi_col, a_variant, b_name, b_is_dqn)
+            a, b, meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                                 a_variant, b_name, b_is_dqn, "primary")
             p, med, lo, hi, n = _wilcoxon(a, b)
+            ac, bc, meta_c = _series(dqn, base, es, scenario, kpi_col, direction,
+                                     a_variant, b_name, b_is_dqn, "complete")
+            p_c, med_c, lo_c, hi_c, n_c = _wilcoxon(ac, bc)
+            # A2.4: an imputed magnitude is a modelling choice, so it may not stand as the
+            # reported effect size - that falls back to the measured (complete-case) episodes.
+            eff = (med_c, lo_c, hi_c, "complete-case") if meta["imputed"] else (med, lo, hi, "primary")
             records.append(
                 {
                     "kpi": kpi_label,
@@ -152,21 +174,47 @@ def build_confirmatory_family(
                     "headline": kpi_col in HEADLINE,
                     "comparison": blabel,
                     "n": n,
-                    "dropped": dropped,
-                    "median_diff": med,
-                    "ci_lo": lo,
-                    "ci_hi": hi,
+                    "dropped": meta["dropped"],
+                    "sd_train_seed": meta["sd_ts"],
+                    "censored_a": meta["cens_a"],
+                    "censored_b": meta["cens_b"],
+                    "imputed": meta["imputed"],
+                    "median_diff": eff[0],
+                    "ci_lo": eff[1],
+                    "ci_hi": eff[2],
+                    "effect_source": eff[3],
                     "p_raw": p,
+                    # A4: decidability uses the EFFECTIVE n (non-zero differences) - Pratt zeros
+                    # from A4.2 mutual-failure ties carry no signed-rank evidence - and a
+                    # comparison with no fully-observed pair is undecidable by definition.
+                    "undecidable": bool(_effective_n(a, b) < floor_n or meta["fully_imputed"]),
+                    "n_eff": _effective_n(a, b),
+                    "n_observed": meta["n_observed"],
+                    "fully_imputed": meta["fully_imputed"],
+                    "n_cc": n_c,
+                    "dropped_cc": meta_c["dropped_cens"],
+                    "p_raw_cc": p_c,
                 }
             )
     df = pd.DataFrame.from_records(records)
     # Holm divides by the PRE-REGISTERED family size (21/7/7), not by however many tests
     # survived censoring - a data-dependent m weakens the correction exactly when the
-    # evidence is already degraded (prereg s6).
-    df["p_holm"] = _holm(df["p_raw"].tolist(), family_size=len(df))
+    # evidence is already degraded (prereg s6). Amendment A3 is the one sanctioned reduction:
+    # a test that cannot reject under ANY data leaves the family instead of taxing its siblings.
+    # A4 supersedes A3's m-reduction: n is data-dependent, so shrinking m by the undecidable
+    # count is the data-dependent m the _holm docstring warns against. m stays pinned.
+    n_und = int(df["undecidable"].sum())
+    m_used = prereg_m
+    df["p_holm"] = _holm(df["p_raw"].where(~df["undecidable"], np.nan).tolist(), family_size=m_used)
+    df["p_holm_cc"] = _holm(df["p_raw_cc"].where(df["n_cc"] >= floor_n, np.nan).tolist(),
+                            family_size=m_used)
     df["stars"] = df["p_holm"].apply(_stars)
     df["significant"] = df["p_holm"].apply(lambda p: bool(p < ALPHA) if not np.isnan(p) else False)
-    df["family_size"] = int(len(df))  # pre-registered size
+    df["significant_cc"] = df["p_holm_cc"].apply(lambda p: bool(p < ALPHA) if not np.isnan(p) else False)
+    df["agrees"] = (df["significant"] == df["significant_cc"]) & ~df["undecidable"] & (df["n_cc"] >= floor_n)
+    df["family_size"] = int(prereg_m)          # pre-registered size
+    df["family_size_used"] = int(m_used)        # after A3 exclusions, stated in the caption
+    df["min_testable_n"] = int(floor_n)
     df["family_testable"] = int(df["p_raw"].notna().sum())  # how many were computable
     return df
 
@@ -190,6 +238,20 @@ def build_family_c3(rows: list[dict]) -> pd.DataFrame:
     return build_confirmatory_family(rows, "hybrid", [("random-lstm", True, "DQN-random-lstm")])
 
 
+def build_family_c4(rows: list[dict]) -> pd.DataFrame:
+    """C4/H1' (A5): plain vs {webster, max_pressure, actuated} x 7 KPIs = 21 hypotheses (SCN-05).
+
+    Pre-registered 2026-09-01, before any corrected-world evaluation episode existed, so that the
+    thesis' fallback headline - "the RL controller beats the baselines" - is confirmatory rather
+    than a comparison promoted after the forecast ablation disappointed.
+    """
+    return build_confirmatory_family(
+        rows,
+        "plain",
+        [("webster", False, "Webster"), ("max_pressure", False, "Max-pressure"), ("actuated", False, "SUMO-actuated")],
+    )
+
+
 def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
     """Exploratory: hybrid vs plain and hybrid vs random-lstm on the 3 headline KPIs, ALL 5
     scenarios, raw p, no family correction. Shows where the forecast helps / hurts by regime -
@@ -204,11 +266,25 @@ def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
             for kpi_col, kpi_label, direction in KPIS:
                 if kpi_col not in HEADLINE:
                     continue
-                a, b, dropped = _pairs(dqn, base, es, scenario, kpi_col, "hybrid", b_name, True)
+                a, b, meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                                     "hybrid", b_name, True, "primary")
+                dropped = meta["dropped"]
                 p, med, lo, hi, n = _wilcoxon(a, b)
-                verdict = "no effect detected at n=15" if (np.isnan(p) or p >= ALPHA) else (
+                # A2.4/A4.2: an imputed magnitude may drive the p-value but NEVER the reported
+                # effect size. build_confirmatory_family already honours this; this function did
+                # not, and was printing the +-D sentinel to the reader as a wait time in seconds.
+                if meta["imputed"]:
+                    ac, bc, _mc = _series(dqn, base, es, scenario, kpi_col, direction,
+                                          "hybrid", b_name, True, "complete")
+                    _pc, med, lo, hi, _nc = _wilcoxon(ac, bc)
+                # prereg s7: an exploratory non-rejection is "not detected at this power",
+                # never "no effect" - and the n quoted must be the ACTUAL n (A1.2), not 15.
+                # A fully-imputed comparison contains no measurement at all; calling it
+                # "no effect detected" is the most misleading line the pipeline can emit.
+                verdict = "NO DATA (every pair censored)" if meta["fully_imputed"] else (
+                    f"no effect detected at n={n}" if (np.isnan(p) or p >= ALPHA) else (
                     "hybrid better" if (med < 0) == (direction == "lower") else "hybrid worse"
-                )
+                ))
                 records.append(
                     {
                         "scenario": scenario,
@@ -219,6 +295,9 @@ def build_supporting_regime(rows: list[dict]) -> pd.DataFrame:
                         "ci_lo": lo,
                         "ci_hi": hi,
                         "n": n,
+                        "n_observed": meta["n_observed"],
+                        "imputed": meta["imputed"],
+                        "effect_source": "complete-case" if meta["imputed"] else "primary",
                         "dropped": dropped,
                         "p_raw": p,
                         "verdict": verdict,
@@ -286,7 +365,9 @@ def _sig_marker(rows: list[dict], scenario: str, baseline_or_variant: str, kpi_c
     dqn, base = _index(rows)
     es = _eval_seeds(rows, scenario)
     is_dqn = baseline_or_variant in HEADLINE_VARIANTS and baseline_or_variant != "hybrid"
-    a, b, _dropped = _pairs(dqn, base, es, scenario, kpi_col, "hybrid", baseline_or_variant, is_dqn)
+    direction = next(d for c, _l, d in KPIS if c == kpi_col)
+    a, b, _meta = _series(dqn, base, es, scenario, kpi_col, direction,
+                          "hybrid", baseline_or_variant, is_dqn, "primary")
     p, _med, _lo, _hi, _n = _wilcoxon(a, b)
     if np.isnan(p) or p >= ALPHA:
         return ""
@@ -390,18 +471,30 @@ def build_t3_lstm_standalone() -> pd.DataFrame:
         gate = d.get("gate", {})
         ss_near = gate.get("ss_h1", gate.get("ss_near", float("nan")))
         ss_far = gate.get("ss_h3", gate.get("ss_far", float("nan")))
+        # A6.3.4: the gate reads the first and last forecast points only. The middle one has been
+        # the worst in every run ever trained here, so a table that prints the verdict without it
+        # is a table that hides the reason to distrust the verdict.
+        all_ss = d.get("skill_scores_val") or []
+        ss_mid = all_ss[1] if len(all_ss) == 3 else float("nan")
+        # The corpus hash covers all 100 CSVs whichever subset is read, so pre- and post-A6 runs
+        # carry the SAME data_version. Only the split distinguishes them, and reports written
+        # before A6.4 carry none - printing it is what stops two experiments merging in one table.
+        splits = d.get("splits")
+        version = d.get("lstm_version")
         records.append(
             {
-                "lstm_version": d.get("lstm_version"),
+                "lstm_version": version,
                 "seed": d.get("seed"),
+                "train_split": ",".join(splits["train"]) if splits else "SCN-01,SCN-02,SCN-03 (pre-A6)",
                 "val_mse": d.get("val_mse"),
                 "test_mse": d.get("test_mse"),
                 "r2_val": d.get("r2_val"),
                 "skill_score_nearest_horizon": ss_near,
+                "skill_score_middle_horizon_UNGATED": ss_mid,
                 "skill_score_farthest_horizon": ss_far,
                 "gate_verdict": gate.get("verdict"),
                 "ship": gate.get("ship"),
-                "deployed": d.get("lstm_version") == DEPLOYED_LSTM_VERSION,
+                "deployed_for_train_seed": DEPLOYED_SEED_BY_VERSION.get(version, ""),
             }
         )
     return pd.DataFrame.from_records(records)
@@ -866,11 +959,22 @@ def main() -> None:
     )
 
     # T3 / T4
-    write_table(build_t3_lstm_standalone(), "T3_lstm_standalone", _OUT_DIR,
-                "T3: LSTM standalone eval - all 6 training attempts",
-                f"Deployed = {DEPLOYED_LSTM_VERSION} (SHIP_WITH_CAVEAT). Only 2 of 6 attempts passed "
-                "the skill-score gate. MSE is the LSTM's own held-out val/test split, not decomposed "
-                "per-scenario in the source jsons - no SCN-05-only forecast MSE exists on disk.")
+    t3 = build_t3_lstm_standalone()
+    n_total = len(t3)
+    n_ship = int(t3["ship"].fillna(False).astype(bool).sum())
+    deployed = ", ".join(f"seed {s} -> {v}" for s, v in sorted(DEPLOYED_LSTM_VERSIONS.items()))
+    write_table(t3, "T3_lstm_standalone", _OUT_DIR,
+                f"T3: LSTM standalone eval - all {n_total} training attempts",
+                f"Deployed (A6.4, one forecaster per DQN training seed): {deployed}. "
+                f"{n_ship} of {n_total} attempts passed the skill-score gate. "
+                "Read `train_split` before comparing rows: pre- and post-A6 runs share one corpus "
+                "hash and differ only in the split, and the pre-A6 rows are the pre-registered "
+                "PRIMARY forecaster result (A6.3.1) while the SCN-10 rows are the declared "
+                "SECONDARY analysis (A6.3.2). `skill_score_middle_horizon_UNGATED` is the 90 s "
+                "point the freeze gate never inspects; it is negative in every run, so every "
+                "SHIP verdict here is a verdict over two of the model's three outputs (A6.3.4). "
+                "MSE is the LSTM's own held-out val/test split, not decomposed per-scenario in "
+                "the source jsons - no SCN-05-only forecast MSE exists on disk.")
     write_table(build_t4_wallclock_budget(), "T4_wallclock_budget", _OUT_DIR,
                 "T4: Wall-clock budget per condition",
                 "GAP: no wall-clock timing field was found in config.yaml, episodes.csv, steps.csv, "

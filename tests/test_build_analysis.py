@@ -108,39 +108,91 @@ def test_algo_key_uses_variant_for_dqn_rows_and_algo_for_baselines():
 
 
 # --------------------------------------------------------------------------------------------
-# Confirmatory families - reuses the locked _pairs/_wilcoxon/_holm; check family bookkeeping
+# Confirmatory families - reuses the locked _series/_wilcoxon/_holm; check family bookkeeping.
+# Amended 2026-09-01 (prereg A1/A2/A3): n is the EVAL-SEED count, and censoring no longer drops
+# pairs in the primary analysis.
 # --------------------------------------------------------------------------------------------
 
 
 def test_confirmatory_family_c2_detects_clear_shift_and_reports_family_size_7():
+    """Amendment A1.2: n is the number of EVAL SEEDS, not train_seed x eval_seed.
+
+    The fixture has 3 train seeds x 5 eval seeds. The superseded pairing reported n=15 from 5
+    independent traffic realizations; the three train seeds are now averaged into each eval
+    seed's value and their spread is reported as ``sd_train_seed`` instead of being counted.
+    """
     rows = _make_fixture_rows()
     df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
     assert len(df) == 7  # 7 KPIs
     assert (df["family_size"] == 7).all()
     avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
-    assert avg_wait_row["n"] == 15
+    assert avg_wait_row["n"] == 5, "n counts eval seeds (A1.2), not train x eval pairs"
     assert avg_wait_row["dropped"] == 0
     assert avg_wait_row["median_diff"] == pytest.approx(-1.0)  # hybrid(8) - plain(9)
+    assert avg_wait_row["effect_source"] == "primary"  # nothing censored -> nothing imputed
+    # A3: with m=7 a test needs n>=9 to be capable of rejecting, so this 5-seed fixture is
+    # correctly flagged undecidable rather than being reported as a non-rejection.
+    assert avg_wait_row["min_testable_n"] == 9
+    assert bool(avg_wait_row["undecidable"]) is True
 
 
-def test_confirmatory_family_drops_pairs_both_censored():
+def test_confirmatory_family_scores_a_mutual_gridlock_as_a_tie_not_a_drop():
+    """Amendment A2.2, replacing the superseded both-censored DROP.
+
+    Both arms failing on the same traffic is a tie, and the primary analysis keeps it as one:
+    both take the worst rank, the paired difference is exactly 0, and Pratt handles the zero.
+    The complete-case sensitivity analysis still drops it, and both numbers are carried in the
+    same frame so neither can be picked after the fact.
+    """
     rows = _make_fixture_rows()
-    # censor the SAME eval seed for both hybrid and plain across all 3 train seeds -> 3 pairs dropped
     for r in rows:
         if r["eval_seed"] == "7000" and r["variant"] in ("hybrid", "plain"):
             r["gridlock_censored"] = "1"
             r["avg_waiting_time"] = ""
     df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
     avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
-    assert avg_wait_row["n"] == 12
-    assert avg_wait_row["dropped"] == 3
+    assert avg_wait_row["n"] == 5, "primary drops NO pair for censoring"
+    assert avg_wait_row["censored_a"] == 1 and avg_wait_row["censored_b"] == 1
+    assert avg_wait_row["imputed"] == 2, "both arms take the worst rank"
+    assert avg_wait_row["n_cc"] == 4 and avg_wait_row["dropped_cc"] == 1, "complete-case drops it"
+    # A2.4: once anything is imputed the effect size comes from the measured episodes only.
+    assert avg_wait_row["effect_source"] == "complete-case"
+
+
+def test_a_lone_censored_comparator_no_longer_hands_the_treatment_a_free_win():
+    """Amendment A2.1 - the selection bias, pinned.
+
+    The superseded rule dropped a pair only when BOTH arms were censored, so a pair in which
+    only the COMPARATOR gridlocked survived at face value: a win earned by not failing, counted
+    as a wait-time win. Now the failed arm is ranked worst (primary) and the pair is dropped
+    outright by the sensitivity analysis.
+    """
+    rows = _make_fixture_rows()
+    for r in rows:
+        if r["eval_seed"] == "7000" and r["variant"] == "plain":
+            r["gridlock_censored"] = "1"
+            r["avg_waiting_time"] = ""
+    df = build_confirmatory_family(rows, "hybrid", [("plain", True, "DQN-plain")], scenario="SCN-05")
+    avg_wait_row = df[df["kpi_col"] == "avg_waiting_time"].iloc[0]
+    assert avg_wait_row["censored_a"] == 0 and avg_wait_row["censored_b"] == 1
+    assert avg_wait_row["n"] == 5 and avg_wait_row["imputed"] == 1
+    assert avg_wait_row["n_cc"] == 4 and avg_wait_row["dropped_cc"] == 1
+    assert avg_wait_row["dropped"] == 0, "the primary analysis drops nothing for censoring"
 
 
 def test_holm_family_c1_c2_c3_shapes_on_real_csv():
     """Smoke test against the real, committed eval_results.csv - the only place this suite
     touches the filesystem beyond the synthetic fixtures."""
     rows = load_rows()
-    assert len(rows) == 300
+    # The row count is a product of the campaign design, not a constant: it was 300 for the 5-seed
+    # campaign and is 900 for the 15-seed one A1.3 mandates. Asserting the IDENTITY catches the
+    # thing the old literal was really guarding - a truncated or duplicated CSV - without going
+    # stale every time the campaign is re-run.
+    n_scenarios = len({r["scenario"] for r in rows})
+    n_seeds = len({r["eval_seed"] for r in rows})
+    n_algos = len({r["algo"] for r in rows})
+    assert len(rows) == n_scenarios * n_seeds * n_algos, "eval_results.csv is not a full grid"
+    assert len(rows) > 0
     c1 = build_family_c1(rows)
     c2 = build_family_c2(rows)
     c3 = build_family_c3(rows)
@@ -176,17 +228,25 @@ def test_t2_rows_restricted_to_dqn_variants_only():
 
 def test_honest_findings_scn01_hybrid_worse_than_plain_on_real_csv():
     """Regression-locks the pre-registered honest finding: hybrid is WORSE than plain on SCN-01
-    avg wait among non-censored episodes (~2.71s vs ~1.36s) - this must never get quietly fixed
-    by a future refactor of the censoring filter."""
+    avg wait among non-censored episodes - this must never get quietly fixed by a future
+    refactor of the censoring filter.
+
+    The DIRECTION is the finding and is asserted; the magnitudes are not, because they are
+    properties of whichever campaign last wrote eval_results.csv (~2.71s vs ~1.36s in the
+    pre-gridlock-fix data, ~18.0s vs ~17.4s after it). Freezing them made this test fail on a
+    legitimate re-run of the campaign while telling us nothing about the finding itself.
+    """
     rows = load_rows()
     honest = build_honest_findings(rows)
     hyb = honest[(honest["scenario"] == "SCN-01") & (honest["algorithm"] == "DQN-hybrid")
                  & (honest["kpi"] == "avg_waiting_time")].iloc[0]
     pln = honest[(honest["scenario"] == "SCN-01") & (honest["algorithm"] == "DQN-plain")
                  & (honest["kpi"] == "avg_waiting_time")].iloc[0]
-    assert hyb["mean_noncensored"] == pytest.approx(2.71, abs=0.02)
-    assert pln["mean_noncensored"] == pytest.approx(1.36, abs=0.02)
-    assert hyb["mean_noncensored"] > pln["mean_noncensored"]
+    assert hyb["mean_noncensored"] > 0 and pln["mean_noncensored"] > 0
+    assert hyb["mean_noncensored"] > pln["mean_noncensored"], (
+        "the forecast arm is no longer worse than plain on SCN-01 - if the campaign genuinely "
+        "changed this, update the pre-registered honest finding rather than this assertion"
+    )
 
 
 def test_honest_findings_fully_excludes_censored_rows_even_when_kpi_is_non_nan():

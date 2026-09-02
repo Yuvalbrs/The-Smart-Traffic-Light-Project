@@ -9,8 +9,16 @@ import type {
   StartSessionBody,
 } from "./wire";
 
-export const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000";
-export const WS_BASE = API_BASE.replace(/^http/, "ws");
+// Same origin in a built app, because the hub serves this bundle itself - hard-coding port 8000
+// silently broke `run_app.py --port N`, where the page loads from the chosen port and then calls
+// 8000 for every request. In `vite dev` the SPA is on 5173 and the hub is not, so it needs the
+// explicit origin; VITE_API_BASE overrides both.
+export const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ??
+  (import.meta.env.DEV ? "http://localhost:8000" : "");
+export const WS_BASE = API_BASE
+  ? API_BASE.replace(/^http/, "ws")
+  : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
 
 export class ApiError extends Error {
   status: number;
@@ -59,3 +67,214 @@ export const getRunMetadata = (runId: string) =>
 
 export const getRunKpis = (runId: string) =>
   request<RunKpisResponse>(`/runs/${encodeURIComponent(runId)}/kpis`);
+
+// --- REST: /viewer (the Unity 3-D window) ----------------------------------
+
+export interface ViewerStatus {
+  available: boolean;
+  running: boolean;
+  path: string;
+  /** Set when the player has not been built - tells the reader how to build it. */
+  hint: string | null;
+  /** Always set: how to get the same view from the Unity editor instead. */
+  editor_hint: string;
+}
+
+export const getViewer = () => request<ViewerStatus>("/viewer");
+
+export const startViewer = () => request<ViewerStatus>("/viewer", { method: "POST" });
+
+// --- REST: /models ---------------------------------------------------------
+
+export interface ModelInfo {
+  id: string;
+  variant: string;
+  seed: number;
+  episodes: number;
+  episodes_trained: number;
+  obs_dim: number;
+  lstm_version: string | null;
+  git_sha: string | null;
+  has_final: boolean;
+  label: string;
+  source: "matrix" | "user";
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];
+}
+
+export const getModels = () => request<ModelsResponse>("/models");
+
+// --- REST + WS: /training, /ws/training -------------------------------------
+
+export type TrainingVariant = "plain" | "hybrid" | "random-lstm";
+export type TrainingJobStatus = "running" | "done" | "failed" | "cancelled";
+
+export interface StartTrainingBody {
+  variant: TrainingVariant;
+  seed: number;
+  episodes: number;
+  episode_length_s: number | null;
+  label: string | null;
+  /** Scenarios whose demand drives training; null keeps the hub's default rotation. */
+  train_scenarios: string[] | null;
+}
+
+export interface TrainingCurvePoint {
+  ep: number;
+  reward: number;
+  epsilon: number;
+}
+
+export interface TrainingStatus {
+  job_id: string;
+  status: TrainingJobStatus;
+  variant: string;
+  seed: number;
+  episodes: number;
+  label: string | null;
+  train_scenarios: string[] | null;
+  episodes_done: number;
+  pct: number;
+  curve: TrainingCurvePoint[];
+  run_dir: string;
+  started_at: string;
+  error: string | null;
+}
+
+/** WS /ws/training push - a TrainingStatus wrapped in the usual envelope fields. */
+export interface TrainingFrameMessage extends TrainingStatus {
+  schema_version: string;
+  type: "training_frame";
+}
+
+export const getCurrentTraining = () => request<TrainingStatus>("/training/current");
+
+export const startTraining = (body: StartTrainingBody) =>
+  request<TrainingStatus>("/training", { method: "POST", body: JSON.stringify(body) });
+
+export type StopTrainingResult = "stopped" | "stopping";
+
+/**
+ * DELETE /training/current distinguishes 204 (stopped) from 202 (still stopping) - the generic
+ * request() helper only sees "ok", so this reimplements the fetch to read the status code.
+ */
+export async function stopTraining(): Promise<StopTrainingResult> {
+  const res = await fetch(API_BASE + "/training/current", { method: "DELETE" });
+  if (res.status === 204) return "stopped";
+  if (res.status === 202) return "stopping";
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    detail = body.detail ?? detail;
+  } catch {
+    // body wasn't JSON; keep statusText
+  }
+  throw new ApiError(res.status, detail);
+}
+
+// --- REST + WS: /evaluation, /ws/evaluation ---------------------------------
+
+export type EvaluationJobStatus = "running" | "done" | "failed" | "cancelled";
+
+export interface StartEvaluationBody {
+  model_id: string;
+  scenario: string;
+  seeds: number;
+}
+
+export interface EvaluationStatus {
+  job_id: string;
+  status: EvaluationJobStatus;
+  model_id: string;
+  label: string;
+  scenario: string;
+  seeds: number;
+  episodes_done: number;
+  episodes_total: number;
+  pct: number;
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+}
+
+/** WS /ws/evaluation push - an EvaluationStatus wrapped in the usual envelope fields. */
+export interface EvaluationFrameMessage extends EvaluationStatus {
+  schema_version: string;
+  type: "evaluation_frame";
+}
+
+export const getCurrentEvaluation = () => request<EvaluationStatus>("/evaluation/current");
+
+export const startEvaluation = (body: StartEvaluationBody) =>
+  request<EvaluationStatus>("/evaluation", { method: "POST", body: JSON.stringify(body) });
+
+export type StopEvaluationResult = "stopped" | "stopping";
+
+/**
+ * DELETE /evaluation/current distinguishes 204 (stopped) from 202 (still stopping) - the generic
+ * request() helper only sees "ok", so this reimplements the fetch to read the status code.
+ */
+export async function stopEvaluation(): Promise<StopEvaluationResult> {
+  const res = await fetch(API_BASE + "/evaluation/current", { method: "DELETE" });
+  if (res.status === 204) return "stopped";
+  if (res.status === 202) return "stopping";
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    detail = body.detail ?? detail;
+  } catch {
+    // body wasn't JSON; keep statusText
+  }
+  throw new ApiError(res.status, detail);
+}
+
+// --- REST: /comparison -------------------------------------------------------
+
+export interface ComparisonKpi {
+  key: string;
+  label: string;
+  lower_is_better: boolean;
+}
+
+export interface ComparisonRow {
+  controller: string;
+  label: string;
+  is_ours: boolean;
+  is_user_model: boolean;
+  n_episodes: number;
+  avg_waiting_time: number | null;
+  throughput: number | null;
+  avg_queue_length: number | null;
+  wait_p95: number | null;
+  worst_movement_max_wait: number | null;
+  gridlock_rate: number | null;
+}
+
+export interface ComparisonCampaign {
+  git_sha: string;
+  episodes: number;
+  newest_run_at: string;
+}
+
+export interface ComparisonProvenance {
+  git_sha: string | null;
+  newest_run_at: string | null;
+  source: string;
+  available_campaigns: ComparisonCampaign[];
+  // Non-empty when the comparison includes models trained inside the app: those were evaluated
+  // against whatever code was checked out at training time, not necessarily the campaign's git_sha.
+  user_model_shas: string[];
+}
+
+export interface ComparisonResponse {
+  scenario: string;
+  rows: ComparisonRow[];
+  kpis: ComparisonKpi[];
+  provenance: ComparisonProvenance;
+  note: string;
+}
+
+export const getComparison = (scenario: string) =>
+  request<ComparisonResponse>(`/comparison?scenario=${encodeURIComponent(scenario)}`);

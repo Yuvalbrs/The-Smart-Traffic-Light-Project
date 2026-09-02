@@ -21,7 +21,8 @@ import numpy as np
 
 from scripts.build_actuated import build_actuated_add
 from scripts.build_network import build_net
-from scripts.eval_runner import Algo, _OFFICIAL_LSTM, _load_agent, run_eval_episode
+from scripts.eval_runner import Algo, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster
 from src.scenarios.config import SCENARIO_DIR, load_scenario
@@ -53,7 +54,10 @@ def main() -> None:
     plain = {s: _load_agent(_RUNS / f"plain_seed{s}" / "checkpoints" / "ep299.pt", 20) for s in SEEDS}
     hybrid = {s: _load_agent(_RUNS / f"hybrid_seed{s}" / "checkpoints" / "ep299.pt", HYBRID_OBS_DIM)
               for s in SEEDS}
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    # A6.4: the pin is per DQN training seed, so hybrid[s] must be paired with seed s's own
+    # forecaster - one shared forecaster (the old code) would silently re-run seed 123's and
+    # 2024's hybrid agents against seed 42's forecast, which is not what they were trained on.
+    forecaster = {s: load_forecaster(str(official_lstm_checked(s))) for s in SEEDS}
 
     for scn_id in args.scenarios:
         scn = load_scenario(SCENARIO_DIR / f"scn_{scn_id.split('-')[1]}.yaml")
@@ -70,7 +74,7 @@ def main() -> None:
             for s in SEEDS:
                 rows.setdefault(f"plain-s{s}", []).append(_run(Algo(f"plain{s}", "dqn", agent=plain[s])))
                 rows.setdefault(f"hybrid-s{s}", []).append(
-                    _run(Algo(f"hyb{s}", "dqn", agent=hybrid[s], forecaster=forecaster)))
+                    _run(Algo(f"hyb{s}", "dqn", agent=hybrid[s], forecaster=forecaster[s])))
 
         print(f"\n=== {scn_id} ===   (wait s | throughput | %gridlock)", flush=True)
         order = ["webster"] + [f"{v}-s{s}" for s in SEEDS for v in ("plain", "hybrid")]

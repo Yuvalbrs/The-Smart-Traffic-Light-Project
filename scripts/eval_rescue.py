@@ -25,7 +25,8 @@ import numpy as np
 
 from scripts.analyze_eval import _wilcoxon
 from scripts.build_network import build_net
-from scripts.eval_runner import _OFFICIAL_LSTM, Algo, _load_agent, run_eval_episode
+from scripts.eval_runner import Algo, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.ml.hybrid_wrapper import load_forecaster
 from src.scenarios.config import SCENARIO_DIR, load_scenario
 
@@ -44,9 +45,12 @@ VARIANTS = {
 }
 
 
-def _forecaster(kind):
+def _forecaster(kind, seed):
+    # A6.4: "official" is pinned per DQN training seed, so this needs the training seed of
+    # the agent it will be paired with - "boot" is a single fixed (non-official) checkpoint
+    # and ignores it, same as before.
     if kind == "official":
-        return load_forecaster(str(_OFFICIAL_LSTM))
+        return load_forecaster(str(official_lstm_checked(seed)))
     if kind == "boot":
         return load_forecaster(str(_BOOT_LSTM))
     return None
@@ -60,13 +64,16 @@ def main() -> None:
     # results[variant][(train_seed, eval_seed)] = (avg_wait, throughput, censored)
     results: dict[str, dict] = {v: {} for v in VARIANTS}
     for variant, (prefix, obs_dim, fckind) in VARIANTS.items():
-        forecaster = _forecaster(fckind)
         for ts in SEEDS:
             ckpt = _RUNS / f"{prefix}_seed{ts}" / "checkpoints" / "ep299.pt"
             if not ckpt.exists():
                 print(f"[rescue] MISSING {ckpt} - run the hybrid-boot retrain first.")
                 return
             agent = _load_agent(ckpt, obs_dim)
+            # per-seed, not hoisted above this loop: hybrid-official must load ts's pinned
+            # forecaster, or all three seeds of that arm silently evaluate against one seed's
+            # checkpoint (the bug A6.4's per-seed pin exists to make impossible to miss).
+            forecaster = _forecaster(fckind, ts)
             algo = Algo(f"{variant}-s{ts}", "dqn", agent=agent, forecaster=forecaster)
             for es in EVAL_SEEDS:
                 kpis, _r = run_eval_episode(scn, es, algo, work_dir=_OUT,

@@ -21,14 +21,35 @@ namespace SmartTraffic
             public Scene(string id, string name, string blurb) { Id = id; Name = name; Blurb = blurb; }
         }
 
-        /// <summary>Mirrors config/scenarios/scn_0*.yaml.</summary>
+        /// <summary>Mirrors config/scenarios/scn_*.yaml and SCENARIOS in src/api/server.py.
+        ///
+        /// Hand-synced, and therefore able to drift: the hub already returns both this list and
+        /// the controller list from GET /controllers, so fetching them at startup would remove
+        /// the duplication entirely. Not done before the deadline because it changes the startup
+        /// path of the screen the whole demo runs through; recorded as the obvious next cleanup.
+        /// Only SCN-A1..A4 are deliberately absent - they need the two-junction network.
+        ///
+        /// It DID drift: SCN-R1 shipped in the hub and never arrived here, so the measured-demand
+        /// scenario was unreachable from Unity. Until the fetch-at-startup cleanup happens,
+        /// tests/test_client_scenario_lists.py fails the build whenever this list and the hub's
+        /// disagree - a hand-synced list with no alarm on it drifts silently, which is how this
+        /// one broke.</summary>
         public static readonly Scene[] Scenes =
         {
-            new Scene("SCN-01", "Uniform light", "Low, symmetric demand. The easy regime."),
-            new Scene("SCN-02", "Uniform heavy", "High, symmetric demand. Saturated but stable."),
-            new Scene("SCN-03", "Rush hour peak", "N/S peak decays as E/W builds."),
-            new Scene("SCN-04", "Asymmetric", "Heavy N/S, light E/W. Starvation probe."),
-            new Scene("SCN-05", "Shifting demand", "Both axes oscillate, 90 deg out of phase."),
+            // Descriptions are for a person watching the demo, not for whoever wrote the YAML.
+            // "Anti-phase, 300 s period; split swings 100..600" is precise and tells a viewer
+            // nothing; what they want to know is what the traffic DOES and what it is testing.
+            new Scene("SCN-01", "Quiet road", "Light traffic, the same from every direction. The easy case."),
+            new Scene("SCN-02", "Busy all round", "Heavy traffic from every direction at once, but steady."),
+            new Scene("SCN-03", "Rush hour peak", "The morning rush: north-south fades as east-west builds."),
+            new Scene("SCN-04", "One busy road", "Heavy north-south, quiet east-west. Does the quiet road still get a turn?"),
+            new Scene("SCN-05", "Direction keeps swapping", "The busy direction changes back and forth. Tests how fast it reacts."),
+            new Scene("SCN-06", "Busy and swapping", "Almost at capacity, and the busy direction keeps changing."),
+            new Scene("SCN-07", "One road overloaded", "Four times as much traffic north-south as east-west."),
+            new Scene("SCN-08", "Rapid swaps", "The rush switches direction every five minutes. The hardest reaction test."),
+            new Scene("SCN-09", "Rapid swaps, lighter", "Switches every five minutes, but never quite fills up."),
+            new Scene("SCN-10", "Rapid swaps (training)", "Switches every four minutes. Used for training, never for scoring."),
+            new Scene("SCN-R1", "Hangzhou (real data)", "Real traffic counts recorded at a junction in Hangzhou, not a formula."),
         };
 
         /// <summary>Mirrors CONTROLLERS in src/api/live.py.</summary>
@@ -41,14 +62,18 @@ namespace SmartTraffic
 
         // Layout constants. The panel height is DERIVED from these rather than guessed, because a
         // guessed height is what pushed the run button off the bottom of the panel before.
-        private const float Pad = 24f;      // panel inset
-        private const float Gap = 7f;       // between buttons in a group
-        private const float Section = 16f;  // between groups
-        private const float HeadH = 22f;
-        private const float RowH = 32f;
-        private const float RunH = 40f;
+        // Sized for the type in UITheme, which is now 20 pt headings and 17 pt cells. These were
+        // set for 13 pt: a 22 px heading row clipped the descenders off "CONTROLLER", and a 32 px
+        // scene row wrapped "SCN-01" onto a second line that had nowhere to go. Layout constants
+        // and font sizes are one decision, and changing either alone breaks the screen.
+        private const float Pad = 28f;      // panel inset
+        private const float Gap = 9f;       // between buttons in a group
+        private const float Section = 22f;  // between groups
+        private const float HeadH = 34f;
+        private const float RowH = 46f;
+        private const float RunH = 54f;
 
-        public const float PanelWidth = 660f;
+        public const float PanelWidth = 900f;
 
         public static float PanelHeight =>
             Pad
@@ -80,9 +105,9 @@ namespace SmartTraffic
                 {
                     cfg.Scenario = scene.Id;
                 }
-                GUI.Label(new Rect(row.x + 14f, row.y, 66f, RowH), scene.Id, UITheme.CellId(on));
-                GUI.Label(new Rect(row.x + 88f, row.y, 132f, RowH), scene.Name, UITheme.CellName(on));
-                GUI.Label(new Rect(row.x + 228f, row.y, w - 242f, RowH), scene.Blurb,
+                GUI.Label(new Rect(row.x + 16f, row.y, 92f, RowH), scene.Id, UITheme.CellId(on));
+                GUI.Label(new Rect(row.x + 116f, row.y, 210f, RowH), scene.Name, UITheme.CellName(on));
+                GUI.Label(new Rect(row.x + 334f, row.y, w - 350f, RowH), scene.Blurb,
                     UITheme.CellBlurb(on));
                 y += RowH + Gap;
             }
@@ -121,23 +146,26 @@ namespace SmartTraffic
             }
             y += RowH + Gap + Section - Gap;
 
-            GUI.Label(new Rect(x, y, w, 20f),
+            var hintH = UITheme.LineH(UITheme.Hint);
+            GUI.Label(new Rect(x, y, w, hintH),
                 "seed " + cfg.Seed + "   -   same seed and scene means identical traffic",
                 UITheme.Hint);
-            y += 20f;
+            y += hintH;
 
             var status = session == null
                 ? ""
                 : "session: " + session.State + "   " + session.RunningController + " on " +
                   session.RunningScenario + "   sim " + session.SimTime.ToString("F0") + " s";
-            GUI.Label(new Rect(x, y, w, 22f), status, UITheme.Label);
-            y += 22f;
+            // 22f clipped "running" and "dqn-plain" through the middle of their descenders.
+            var statusH = UITheme.LineH(UITheme.Label);
+            GUI.Label(new Rect(x, y, w, statusH), status, UITheme.Label);
+            y += statusH;
 
             if (session != null && session.LastError != null)
             {
                 var err = new GUIStyle(UITheme.Hint);
                 err.normal.textColor = new Color(1f, 0.45f, 0.4f);
-                GUI.Label(new Rect(x, y, w, 18f), session.LastError, err);
+                GUI.Label(new Rect(x, y, w, UITheme.LineH(err)), session.LastError, err);
             }
             y += 18f + Gap;
 

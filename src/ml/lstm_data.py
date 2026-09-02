@@ -20,11 +20,11 @@ PINNED (DoD: no cross-reference to "Chat 2"):
 * ``STRIDE    = 1``   one window per start row.
 
 Split is **scenario-level, not random-window** (lstm-forecasting.md "Why
-scenario-level split"): train SCN-01/02/03, val SCN-04, test SCN-05. Windows are
-built **per file**, so a single window never spans two episodes and never crosses a
-train/val/test boundary - the leakage guard the DoD requires. A random window split
-would leak: windows from one scenario share dynamics, so validating on other windows
-of a *seen* scenario lets the model see the val distribution.
+scenario-level split"): see ``SPLITS``. Windows are built **per file**, so a single
+window never spans two episodes and never crosses a train/val/test boundary - the
+leakage guard the DoD requires. A random window split would leak: windows from one
+scenario share dynamics, so validating on other windows of a *seen* scenario lets the
+model see the val distribution.
 
 Normalization: NOT applied here - the loader yields raw queue/count values and the
 training loop owns any scaling (lstm-forecasting.md trains on raw MSE; queue and
@@ -56,10 +56,27 @@ STRIDE = 1
 # the hybrid state stays 56-dim (no DQN-side change).
 DEFAULT_TARGET_OFFSETS: tuple[int, ...] = (6, 9, 12)
 
-# Scenario-level split (lstm-forecasting.md "Training data" table). Disjoint by
-# construction - asserted in the leakage test.
+# Scenario-level split. Disjoint by construction - asserted in the leakage test.
+#
+# **Amendment A6 (2026-09-01)** added SCN-10 to train. Before it, train was SCN-01
+# (constant demand), SCN-02 (constant) and SCN-03 (one monotone ramp, then hold) while
+# test was SCN-05 - *both axes oscillating 200-600 vph continuously, 90 deg out of
+# phase*. The forecaster therefore never saw shifting demand in training and was scored
+# on nothing else, so its test MSE measured extrapolation to an unseen regime as much as
+# it measured forecasting. SCN-10 ("Fast-shifting (training)") is the scenario built to
+# supply that exposure and is already in the DQN's training rotation.
+#
+# SCN-06/07/08/09 are deliberately EXCLUDED and must stay excluded: SCN-06 is a DQN
+# evaluation scenario and SCN-07/08/09 each declare themselves held-out test scenarios in
+# their own YAML. Training the forecaster on them would make SCN-08/09 non-zero-shot for
+# the `hybrid` arm while they stay zero-shot for `plain` - an asymmetric leak favouring
+# the hypothesis under test. Half this corpus is *supposed* to go unread; it is the
+# evaluation half. Changing that needs its own amendment (preregistration.md A6.2).
+#
+# SCN-05 stays sealed: unseen by the DQN, unseen by the forecaster, and never used for
+# early stopping or for the freeze gate.
 SPLITS: dict[str, tuple[str, ...]] = {
-    "train": ("SCN-01", "SCN-02", "SCN-03"),
+    "train": ("SCN-01", "SCN-02", "SCN-03", "SCN-10"),
     "val": ("SCN-04",),
     "test": ("SCN-05",),
 }
@@ -124,19 +141,30 @@ class LSTMDataset(Dataset):
     """
 
     def __init__(
-        self, files: list[Path], target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS
+        self,
+        files: list[Path],
+        target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
+        sources: list[tuple[str, np.ndarray]] | None = None,
     ) -> None:
+        """``files`` reads CSVs; ``sources`` takes already-loaded ``(name, features)`` pairs.
+
+        The second form exists so the corpus can come from the database instead of a directory
+        (see :func:`features_from_db`). Both funnel into the SAME windowing below - the windowing
+        is where a subtle difference would silently change what the forecaster learns, so there is
+        exactly one copy of it, and a test asserts the two paths produce identical tensors.
+        """
         self.target_offsets = target_offsets
         xs: list[np.ndarray] = []
         ys: list[np.ndarray] = []
         self.window_sources: list[str] = []
-        for path in files:
-            x, y = _window_file(_load_features(path), target_offsets)
+        named = sources if sources is not None else [(p.stem, _load_features(p)) for p in files]
+        for name, feats in named:
+            x, y = _window_file(feats, target_offsets)
             if len(x) == 0:
                 continue
             xs.append(x)
             ys.append(y)
-            self.window_sources += [path.stem] * len(x)
+            self.window_sources += [name] * len(x)
         self._x = (
             torch.from_numpy(np.concatenate(xs)) if xs
             else torch.empty((0, INPUT_LEN, N_FEATURES))
@@ -158,11 +186,74 @@ class LSTMDataset(Dataset):
         return self._x.mean(dim=(0, 1)), self._x.std(dim=(0, 1))
 
 
+def features_from_db(
+    split: str, db_path: Path | None = None
+) -> list[tuple[str, np.ndarray]]:
+    """One split's corpus, read from the database instead of from CSV files.
+
+    Returns ``(episode_name, features[n_rows, 24])`` per episode, ordered by name and then by
+    decision step, so the sequence a window is cut from is the same sequence the CSV path yields.
+    Ingested by ``scripts/ingest_lstm_corpus.py``; the observation rows store
+    ``{"q": [12], "c": [12]}`` and the 24 features are q followed by c, matching the CSV header.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from scripts.ingest_lstm_corpus import CORPUS_MODE
+    from src.db.engine import create_db_engine
+    from src.db.models import Episode, ExperimentRun, Observation
+
+    if split not in SPLITS:
+        raise ValueError(f"unknown split {split!r}; expected one of {sorted(SPLITS)}")
+    path = db_path or (_REPO_ROOT / "data" / "traffic.db")
+    if not Path(path).exists():
+        raise FileNotFoundError(
+            f"{path} does not exist. Ingest the corpus first: "
+            f"python -m scripts.ingest_lstm_corpus"
+        )
+
+    engine = create_db_engine(Path(path))
+    out: list[tuple[str, np.ndarray]] = []
+    with Session(engine) as session:
+        episodes = session.execute(
+            select(Episode.id, Episode.scenario, Episode.seed)
+            .join(ExperimentRun, Episode.run_id_fk == ExperimentRun.id)
+            .where(ExperimentRun.mode == CORPUS_MODE, Episode.scenario.in_(SPLITS[split]))
+        ).all()
+        # Sort by the CSV-equivalent stem so episode ORDER matches the sorted-glob the file path
+        # uses. Order changes which windows land in a shuffled batch, so it is not cosmetic.
+        for episode_id, scenario, seed in sorted(
+            episodes, key=lambda e: f"scn_{e[1].split('-')[1]}_seed_{e[2]:02d}"
+        ):
+            rows = session.execute(
+                select(Observation.state)
+                .where(Observation.episode_id_fk == episode_id)
+                .order_by(Observation.step)
+            ).scalars().all()
+            if not rows:
+                continue
+            feats = np.array(
+                [list(r["q"]) + list(r["c"]) for r in rows], dtype=np.float32
+            )
+            out.append((f"scn_{scenario.split('-')[1]}_seed_{seed:02d}", feats))
+    return out
+
+
 def load_split(
     split: str, data_dir: Path = _DATA_DIR,
     target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
+    source: str = "csv",
 ) -> LSTMDataset:
-    """Build the ``LSTMDataset`` for one split from its scenario CSVs."""
+    """Build the ``LSTMDataset`` for one split.
+
+    ``source="csv"`` reads ``data/lstm/*.csv``; ``source="db"`` reads the same corpus back out of
+    the results database. The two are asserted to produce identical tensors, so which one is used
+    is an operational choice and never a modelling one.
+    """
+    if source == "db":
+        return LSTMDataset([], target_offsets, sources=features_from_db(split))
+    if source != "csv":
+        raise ValueError(f"unknown source {source!r}; expected 'csv' or 'db'")
     return LSTMDataset(files_for_split(split, data_dir), target_offsets)
 
 
@@ -170,6 +261,7 @@ def make_dataloaders(
     data_dir: Path = _DATA_DIR, *, batch_size: int = 64,
     target_offsets: tuple[int, ...] = DEFAULT_TARGET_OFFSETS,
     shuffle_seed: int | None = None,
+    source: str = "csv",
 ) -> dict[str, DataLoader]:
     """Train/val/test ``DataLoader``s (train shuffled; val/test in order).
 
@@ -181,7 +273,7 @@ def make_dataloaders(
     g = torch.Generator().manual_seed(shuffle_seed) if shuffle_seed is not None else None
     return {
         split: DataLoader(
-            load_split(split, data_dir, target_offsets),
+            load_split(split, data_dir, target_offsets, source=source),
             batch_size=batch_size,
             shuffle=(split == "train"),
             generator=g if split == "train" else None,

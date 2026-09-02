@@ -50,7 +50,7 @@ import traci
 from src.env.intersection import (
     N_MOVEMENTS,
     N_PHASES,
-    _VAULT_MOVEMENTS,
+    MOVEMENTS_SPEC,
     Intersection,
 )
 from src.env.intersection import squash_pressures
@@ -179,7 +179,7 @@ class SUMOEnv(gym.Env):
         strict_collisions: bool = False,
         sumo_seed: int = 42,
         use_gui: bool = False,
-        movements_path: str | Path = _VAULT_MOVEMENTS,
+        movements_path: str | Path = MOVEMENTS_SPEC,
         signal_mode: str = "rl",
         additional_file: str | Path | None = None,
         trace_path: str | Path | None = None,

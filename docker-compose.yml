@@ -1,0 +1,61 @@
+# One command brings the whole backend up: `docker compose up --build`
+#
+#   dashboard + REST + both WebSocket channels   ->  http://localhost:8000
+#
+# The Unity 3-D client is not a service here. It is a Windows GUI binary and these containers are
+# Linux and headless, so it runs natively and points at the published port — the same shape as the
+# Android client in Exercise-Advanced-Programming (main-5), where the servers and the datastore
+# were containerised and the client application was not.
+
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Stamps runs made inside the container with the commit that built it. Without it
+        # git_sha is NULL and /comparison reports the mode as empty. Supply it with:
+        #   GIT_SHA=$(git rev-parse HEAD) docker compose up --build
+        GIT_SHA: ${GIT_SHA:-}
+    image: smart-traffic-rl-hub
+    container_name: smart_traffic_hub
+
+    ports:
+      # The container side is fixed at 8000; only the host side is configurable, because the Unity
+      # client and run_app.bat both look for 127.0.0.1:8000. Override for a clash:
+      #   HUB_PORT=8080 docker compose up
+      # ...but then start the viewer against 8080 too, or it will sit on "connecting".
+      - "${HUB_PORT:-8000}:8000"
+
+    volumes:
+      # BIND mounts, not named volumes, on purpose: these are the artefacts you inspect, back up
+      # and ship as release assets. A named volume would hide them inside Docker's own storage.
+      - ./data:/app/data
+      - ./runs:/app/runs
+      - ./checkpoints:/app/checkpoints
+      # Generated deterministically at boot when absent; mounted so the ~1 min build happens once
+      # on the host rather than on every container start.
+      - ./config/routes:/app/config/routes
+
+    environment:
+      LIBSUMO_AS_TRACI: "1"
+      PYTHONUNBUFFERED: "1"
+
+    # PID 1 that reaps zombies and forwards signals properly. SUMO episodes run on worker threads
+    # and the tracer holds open file handles, so a clean SIGTERM is the difference between a
+    # finished JSONL trace and a truncated one.
+    init: true
+
+    # SUMO is single-instance and in-process, and one episode is a thread doing real work.
+    # Restarting on failure would silently start a second simulation over the same volume;
+    # "unless-stopped" is right for a stateless service and wrong for this one.
+    restart: "no"
+
+    stop_grace_period: 20s
+
+    networks:
+      - smart_traffic_network
+
+networks:
+  smart_traffic_network:
+    driver: bridge

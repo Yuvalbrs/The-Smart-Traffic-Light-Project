@@ -27,7 +27,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.ml.lstm_data import _DATA_DIR, DEFAULT_TARGET_OFFSETS, make_dataloaders
+from src.ml.lstm_data import _DATA_DIR, DEFAULT_TARGET_OFFSETS, SPLITS, make_dataloaders
 from src.ml.lstm_model import (
     DROPOUT,
     HIDDEN_SIZE,
@@ -125,10 +125,21 @@ def run_freeze_gate(model: nn.Module, val_loader: DataLoader, device: str) -> tu
 
 
 def _dataset_data_version(data_dir: Path) -> str:
-    """Aggregate the 50 per-file data_versions (manifest) into one dataset version."""
+    """Aggregate the per-file manifest entries into one dataset version.
+
+    Prefers the per-file **content** digests. The previous version aggregated only the per-file
+    ``data_version`` ids, which were derived from configuration and carried no scenario input -
+    so a corpus of 10x SCN-01 produced the same dataset id as the real 10-scenario corpus, and
+    no change in the CSV bytes could ever move the id. A checkpoint name that cannot distinguish
+    two different corpora is not provenance.
+    """
     manifest_path = data_dir / "manifest.json"
     if manifest_path.exists():
-        dvs = sorted(e["data_version"] for e in json.loads(manifest_path.read_text()))
+        entries = json.loads(manifest_path.read_text())
+        shas = sorted(e["file_sha256"] for e in entries if e.get("file_sha256"))
+        if shas:
+            return f"data-{config_hash({'file_sha256s': shas})}"
+        dvs = sorted(e["data_version"] for e in entries)  # pre-2026-09-01 manifests
         return f"data-{config_hash({'file_data_versions': dvs})}"
     return f"data-{config_hash({'data_dir': str(data_dir)})}"  # fallback, no manifest
 
@@ -141,6 +152,12 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--source", choices=("csv", "db"), default="csv",
+        help="where the corpus comes from: the CSV directory, or the results database "
+             "(ingest it with scripts/ingest_lstm_corpus.py). Both yield identical tensors - "
+             "asserted in tests - so this is an operational choice, not a modelling one.",
+    )
     parser.add_argument(
         "--target-offsets", default=",".join(map(str, DEFAULT_TARGET_OFFSETS)),
         help="forecast points as steps ahead, comma-separated (default 6,9,12 = 60/90/120s)",
@@ -155,10 +172,12 @@ def main() -> None:
         )
     torch.manual_seed(args.seed)  # deterministic weight init
     loaders = make_dataloaders(
-        _DATA_DIR, batch_size=args.batch, target_offsets=offsets, shuffle_seed=args.seed
+        _DATA_DIR, batch_size=args.batch, target_offsets=offsets, shuffle_seed=args.seed,
+        source=args.source,
     )
     sizes = {k: len(v.dataset) for k, v in loaders.items()}
-    print(f"[lstm-train] windows: {sizes}")
+    print(f"[lstm-train] windows: {sizes}  (corpus source: {args.source})")
+    print(f"[lstm-train] splits:  " + " | ".join(f"{k}={','.join(v)}" for k, v in sorted(SPLITS.items())))
 
     model = LSTMForecaster()
     # Fit the input normalizer on the TRAIN windows only (no val/test leakage),
@@ -181,6 +200,11 @@ def main() -> None:
         "max_epochs": args.max_epochs, "patience": args.patience,
         "head": "residual",  # ADR-005: forecast = current_queue + delta
         "target_offsets": list(offsets),  # ADR-006: 60/90/120 s horizon
+        # The SPLIT is a training input and belongs in the id. It was in none of the four
+        # ingredients of lstm_version: data_version hashes all 100 CSVs whichever subset is
+        # actually read, so two forecasters trained on different splits of one corpus were
+        # distinguishable only incidentally, via the code SHA. Amendment A6.4.
+        "splits": {k: list(v) for k, v in sorted(SPLITS.items())},
     }
     data_v = _dataset_data_version(_DATA_DIR)
     lstm_v = lstm_version(
@@ -201,6 +225,7 @@ def main() -> None:
         "lstm_version": lstm_v, "data_version": data_v, "seed": args.seed,
         "target_offsets_steps": list(offsets), "horizon_seconds": [o * 10 for o in offsets],
         "window_sizes": sizes, "epochs_run": len(history),
+        "splits": {k: list(v) for k, v in sorted(SPLITS.items())},  # A6.4: readable, not just hashed
         "val_mse": val_mse, "test_mse": test_mse,
         "skill_scores_val": gate_metrics["skill_scores"], "r2_val": gate_metrics["r2"],
         "gate": asdict(decision), "checkpoint": ckpt_path.name,

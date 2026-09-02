@@ -169,22 +169,25 @@ namespace SmartTraffic
 
         private void OnGUI()
         {
-            const float w = 96f, h = 30f, pad = 8f, barH = 74f;
+            // Re-derived for the 18 pt buttons and 20 pt heading in UITheme: at the old 96x30 the
+            // preset captions were cut to "atwork" / "unction" and the bar clipped its own rows.
+            const float w = 150f, h = 42f, pad = 10f, barH = 108f;
 
             var free = Current == Mode.Free;
             var bar = new Rect(0f, Screen.height - barH, Screen.width, barH);
             UITheme.Backdrop(bar);
 
-            GUI.Label(new Rect(pad + 6f, bar.y + 5f, 120f, 18f), "CAMERA", UITheme.Heading);
+            GUI.Label(new Rect(pad + 8f, bar.y + 8f, 130f, UITheme.LineH(UITheme.Heading)),
+                "CAMERA", UITheme.Heading);
 
             var hint = free
                 ? "WASD move   Q/E down/up   shift faster   right-drag look   Esc orbit"
                 : "wheel zoom   right-drag orbit   middle-drag pan";
-            GUI.Label(new Rect(pad + 90f, bar.y + 6f, Screen.width - pad - 100f, 18f),
+            GUI.Label(new Rect(pad + 150f, bar.y + 10f, Screen.width - pad - 160f, 24f),
                 hint, UITheme.Hint);
 
             var x = pad + 6f;
-            var y = bar.y + 30f;
+            var y = bar.y + 44f;
             for (var i = 0; i < Presets.Length; i++)
             {
                 var active = !free && Mathf.Approximately(Yaw, Presets[i].Yaw)
@@ -195,7 +198,7 @@ namespace SmartTraffic
             }
 
             x += 8f;
-            if (GUI.Button(new Rect(x, y, w + 34f, h), free ? "Free camera  ON" : "Free camera  F",
+            if (GUI.Button(new Rect(x, y, w + 60f, h), free ? "Free camera  ON" : "Free camera",
                     free ? UITheme.ButtonOn : UITheme.Button))
             {
                 SetMode(free ? Mode.Orbit : Mode.Free);

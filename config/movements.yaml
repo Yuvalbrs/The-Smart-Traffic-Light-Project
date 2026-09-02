@@ -1,0 +1,123 @@
+# movements.yaml — Intersection movement + NEMA phase specification (B1)
+# =====================================================================
+# Single source of truth for: the 12 movements (M0–M11), the 8 Discrete(8)
+# NEMA dual-ring phases, transition rules, and safety timing.
+#
+# Status: LOGICAL spec is locked here. The SUMO `link_index` for each movement
+#   and the per-phase `state` string are BOUND AT NETWORK-BUILD time (they depend
+#   on the generated .net.xml connection ordering). See `link_index: TBD` below.
+#
+# Decisions baked in (this session, 2026-06-19):
+#   - Right turns are FREE (always permitted, never signal-controlled, never masked).
+#     They still contribute to the 12-dim pressure state, but are NOT part of any phase.
+#   - Left turns are PROTECTED ONLY (each left moves on its own protected green).
+#   - Min-green 10s, yellow 3s, all-red 2s on barrier crossings (locked; see decisions.md).
+# Related: ../notes/action-space.md, ../notes/safety-masking.md, ../notes/research/research-sumo.md
+schema_version: 1
+
+# --- Geometry --------------------------------------------------------
+geometry:
+  approaches: [N, E, S, W]          # canonical order
+  lanes_per_approach: 3             # MPLight allocation:
+  lane_allocation:                  #   leftmost=left-only, middle=through-only, right=through+right
+    left:           "leftmost lane, left-only"
+    through:        "middle lane, through-only"
+    through_right:  "rightmost lane, through + right"
+
+# --- Movements M0–M11 ------------------------------------------------
+# Canonical order: approach (N,E,S,W) x turn (left, through, right).
+# `controlled: true`  => governed by the signal, appears in phases, can be masked.
+# `controlled: false` => right turn, always permitted, NEVER masked; still in pressure state.
+# `link_index` => SUMO connection index; BIND at net build, then validate via
+#   traci.trafficlight.getControlledLinks() (see research-sumo.md §2).
+movements:
+  M0:  {approach: N, turn: left,    controlled: true,  link_index: TBD}
+  M1:  {approach: N, turn: through, controlled: true,  link_index: TBD}
+  M2:  {approach: N, turn: right,   controlled: false, link_index: TBD}
+  M3:  {approach: E, turn: left,    controlled: true,  link_index: TBD}
+  M4:  {approach: E, turn: through, controlled: true,  link_index: TBD}
+  M5:  {approach: E, turn: right,   controlled: false, link_index: TBD}
+  M6:  {approach: S, turn: left,    controlled: true,  link_index: TBD}
+  M7:  {approach: S, turn: through, controlled: true,  link_index: TBD}
+  M8:  {approach: S, turn: right,   controlled: false, link_index: TBD}
+  M9:  {approach: W, turn: left,    controlled: true,  link_index: TBD}
+  M10: {approach: W, turn: through, controlled: true,  link_index: TBD}
+  M11: {approach: W, turn: right,   controlled: false, link_index: TBD}
+
+# --- Action space: Discrete(8) NEMA dual-ring phases -----------------
+# Each action = a compatible (non-conflicting) set of protected movements that
+# get green. Right turns (M2,M5,M8,M11) are green in EVERY phase (free) and are
+# omitted from `green` below. This is the canonical FRAP/MPLight 8-phase set:
+# per axis -> {both throughs, both lefts, approachA left+through, approachB left+through}.
+#
+# group: NS = actions 0-3 (North-South axis), EW = actions 4-7 (East-West axis).
+# The NEMA BARRIER sits between the NS group and the EW group.
+phases:
+  0: {group: NS, name: "NS through",      green: [M1, M7],  desc: "N-through + S-through (opposing throughs)"}
+  1: {group: NS, name: "NS left",         green: [M0, M6],  desc: "N-left + S-left (opposing protected lefts)"}
+  2: {group: NS, name: "N approach",      green: [M0, M1],  desc: "N-left + N-through (single approach)"}
+  3: {group: NS, name: "S approach",      green: [M6, M7],  desc: "S-left + S-through (single approach)"}
+  4: {group: EW, name: "EW through",      green: [M4, M10], desc: "E-through + W-through (opposing throughs)"}
+  5: {group: EW, name: "EW left",         green: [M3, M9],  desc: "E-left + W-left (opposing protected lefts)"}
+  6: {group: EW, name: "E approach",      green: [M3, M4],  desc: "E-left + E-through (single approach)"}
+  7: {group: EW, name: "W approach",      green: [M9, M10], desc: "W-left + W-through (single approach)"}
+
+# --- Transitions -----------------------------------------------------
+# Inserted automatically by the env on any phase change (NOT agent actions).
+transitions:
+  yellow_s: 3            # on EVERY phase change
+  all_red_s: 2           # ONLY when the change crosses the NEMA barrier
+  barrier_crossing: "any change between a group:NS phase (0-3) and a group:EW phase (4-7)"
+  rule: "phase change within the same group -> 3s yellow; change across groups -> 3s yellow + 2s all-red"
+
+# --- Safety timing (enforced by action masking, NOT learned) ---------
+# See safety-masking.md and decisions.md (A1 amendment).
+safety:
+  min_green_s: 10        # cannot switch away until current phase held >= 10s
+  yellow_s: 3
+  all_red_s: 2           # barrier crossings only
+  max_red_s: 120         # anti-starvation bound; AMENDED 2026-08-30 from 60s.
+                         #   A starved direction is forced green before red exceeds this.
+                         #
+                         #   GUARANTEE (measured, not derived): worst-case red is
+                         #   max_red_s + ONE decision interval = 130s. A movement can
+                         #   cross the threshold immediately after a decision and must
+                         #   then wait one full window; that is a discretization floor,
+                         #   not slack. Verified over 163 adversarial phase-preference
+                         #   policies + 25 random seeds: worst 130.0s, zero breaches.
+                         #   With enforcement OFF the same sweep reaches 390s.
+                         #
+                         #   WHY NOT 60: not because 60 is unreachable in principle -
+                         #   phases {0,1,4,5} cover all 8 controlled movements, so an
+                         #   efficient round-robin could hold ~60s. It is because the
+                         #   bound is enforced by NARROWING THE ACTION MASK, and the
+                         #   narrower the bound the more often the safety layer, not the
+                         #   controller, picks the phase. Measured on SCN-02 under a
+                         #   random policy: at 120s the layer fires on 42% of decisions
+                         #   and leaves 2.73 of 8 actions legal. Tightening it drove that
+                         #   to 100% and 1.50 of 8 - at which point every variant is the
+                         #   same forced round-robin and the RL comparison measures
+                         #   nothing. 120s is the point where the bound binds AND the
+                         #   controller still has something to decide.
+                         #
+                         #   SUPERSEDED REASONING (kept so it is not re-derived): the
+                         #   first amendment justified 120 via "4 phases => worst red =
+                         #   3*max_green + 4*yellow + 2*all_red = 196s". That models a
+                         #   full NEMA cycle at max-green, which is NOT what the code
+                         #   does - _starving_phases force-overrides the mask as soon as
+                         #   a movement approaches the bound, independent of max_green_s.
+                         #   The 196s figure describes a mechanism this project does not
+                         #   implement. See decisions.md 2026-08-30.
+  invariant: "every non-terminal state must leave >=1 valid action (assert mask.any())"
+
+# --- Open flags (do not silently resolve) ----------------------------
+open_flags:
+  - id: barrier_only_allred
+    note: >
+      Locked rule inserts all-red ONLY on barrier (NS<->EW) crossings. Some WITHIN-group
+      transitions also swap conflicting movements (e.g. phase 0 NT+ST -> phase 1 NL+SL: a
+      protected left crosses the opposing through's cleared path). A stricter, conflict-based
+      clearance would add all-red there too. Following the locked design as-is; flagged for
+      review. See research-sumo.md and open-items.md.
+  - id: link_index_binding
+    note: "link_index + per-phase SUMO `state` strings are TBD until the .net.xml exists; bind and assert at net build."

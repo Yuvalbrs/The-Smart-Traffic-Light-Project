@@ -20,6 +20,17 @@ export function KpiCharts({ frames }: Props) {
     current_queue_total: f.running_kpis.current_queue_total,
   }));
 
+  // With no frames Recharts still draws axes, so an idle hub looked identical to a running
+  // session whose KPIs happened to sit at zero. Say which it is.
+  if (rows.length === 0) {
+    return (
+      <div className="panel kpi-charts">
+        <h2>Running KPIs (estimates - not the confirmatory results)</h2>
+        <p className="control-note">no data yet - start a session to plot live KPIs</p>
+      </div>
+    );
+  }
+
   return (
     <div className="panel kpi-charts">
       <h2>Running KPIs (estimates - not the confirmatory results)</h2>

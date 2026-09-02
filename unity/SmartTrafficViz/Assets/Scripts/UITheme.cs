@@ -18,7 +18,7 @@ namespace SmartTraffic
         public static readonly Color Ink = new Color(0.92f, 0.94f, 0.97f);
         public static readonly Color Dim = new Color(0.62f, 0.66f, 0.72f);
 
-        private static GUIStyle _button, _buttonOn, _panel, _title, _label, _hint, _heading;
+        private static GUIStyle _button, _buttonOn, _panel, _title, _label, _hint, _heading, _tile;
         private static Texture2D _panelTex, _buttonTex, _hoverTex, _onTex;
 
         private static Texture2D Solid(Color c)
@@ -41,10 +41,13 @@ namespace SmartTraffic
 
             _button = new GUIStyle(GUI.skin.button)
             {
-                fontSize = 13,
+                // 18 pt, up from the original 13. Every size in this file was set while reading
+                // the app on the machine that built it; on a projector at the back of a room the
+                // whole UI was too small to read, which is the only size test that counts.
+                fontSize = 18,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                padding = new RectOffset(10, 10, 7, 7),
+                padding = new RectOffset(16, 16, 11, 11),
                 border = new RectOffset(2, 2, 2, 2),
             };
             _button.normal.background = _buttonTex;
@@ -64,23 +67,56 @@ namespace SmartTraffic
 
             _title = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 30,
+                fontSize = 40,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
             };
             _title.normal.textColor = Color.white;
 
-            _heading = new GUIStyle(GUI.skin.label) { fontSize = 15, fontStyle = FontStyle.Bold };
+            _heading = new GUIStyle(GUI.skin.label) { fontSize = 20, fontStyle = FontStyle.Bold };
             _heading.normal.textColor = Accent;
 
-            _label = new GUIStyle(GUI.skin.label) { fontSize = 13 };
+            _label = new GUIStyle(GUI.skin.label) { fontSize = 17 };
             _label.normal.textColor = Ink;
 
-            _hint = new GUIStyle(GUI.skin.label) { fontSize = 12 };
+            _hint = new GUIStyle(GUI.skin.label) { fontSize = 15 };
             _hint.normal.textColor = Dim;
+
+            // The one number per KPI tile. It is the thing an audience actually reads off this
+            // screen, so it gets its own size rather than sharing the heading's.
+            _tile = new GUIStyle(GUI.skin.label) { fontSize = 34, fontStyle = FontStyle.Bold };
+            _tile.normal.textColor = Color.white;
+
+            // A disabled button must still look like a button, or the layout jumps as controls
+            // enable and disable during a training run.
+            _buttonOff = new GUIStyle(_button);
+            _buttonOff.normal.textColor = new Color(0.45f, 0.48f, 0.54f);
+            _buttonOff.hover.background = _buttonTex;
+            _buttonOff.hover.textColor = _buttonOff.normal.textColor;
+            _buttonOff.active.background = _buttonTex;
+
+            _field = new GUIStyle(GUI.skin.textField)
+            {
+                fontSize = 17, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(10, 10, 6, 6),
+            };
+            _field.normal.textColor = Ink;
+            _field.focused.textColor = Color.white;
+
+            _bad = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = true };
+            _bad.normal.textColor = new Color(1.00f, 0.45f, 0.40f);
+
+            _good = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold };
+            _good.normal.textColor = new Color(0.40f, 0.85f, 0.55f);
+
+            // The caveats under the comparison table are prose, and prose needs wrapping - an
+            // unwrapped label silently clips, which is how a caveat stops being read.
+            _wrap = new GUIStyle(GUI.skin.label) { fontSize = 15, wordWrap = true };
+            _wrap.normal.textColor = Dim;
         }
 
-        private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn;
+        private static GUIStyle _buttonOff, _field, _bad, _good, _wrap;
+
+        private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn, _cellUser;
 
         private static void EnsureCells()
         {
@@ -89,7 +125,7 @@ namespace SmartTraffic
 
             _cellId = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft,
+                fontSize = 17, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft,
             };
             _cellId.normal.textColor = Ink;
 
@@ -104,18 +140,27 @@ namespace SmartTraffic
 
             _cellBlurb = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12, alignment = TextAnchor.MiddleLeft,
+                fontSize = 15, alignment = TextAnchor.MiddleLeft,
             };
             _cellBlurb.normal.textColor = Dim;
 
             _cellBlurbOn = new GUIStyle(_cellBlurb);
             _cellBlurbOn.normal.textColor = new Color(0.82f, 0.90f, 1f);
+
+            // In-app models are set in italic instead of being labelled "yours" in every row.
+            // The distinction still has to be visible - they are evaluated on far fewer seeds
+            // and on different code - but a word repeated down a column is noise.
+            _cellUser = new GUIStyle(_cellName) { fontStyle = FontStyle.Italic };
+            _cellUser.normal.textColor = new Color(0.78f, 0.82f, 0.88f);
         }
 
         /// <summary>Left-aligned row cells, so a list of buttons reads as aligned columns.</summary>
         public static GUIStyle CellId(bool on) { EnsureCells(); return on ? _cellIdOn : _cellId; }
         public static GUIStyle CellName(bool on) { EnsureCells(); return on ? _cellNameOn : _cellName; }
         public static GUIStyle CellBlurb(bool on) { EnsureCells(); return on ? _cellBlurbOn : _cellBlurb; }
+
+        /// <summary>Italic row style for a model trained in the app rather than in the campaign.</summary>
+        public static GUIStyle CellUser { get { EnsureCells(); return _cellUser; } }
 
         public static GUIStyle Button { get { Ensure(); return _button; } }
         public static GUIStyle ButtonOn { get { Ensure(); return _buttonOn; } }
@@ -124,8 +169,27 @@ namespace SmartTraffic
         public static GUIStyle Heading { get { Ensure(); return _heading; } }
         public static GUIStyle Label { get { Ensure(); return _label; } }
         public static GUIStyle Hint { get { Ensure(); return _hint; } }
+        public static GUIStyle Tile { get { Ensure(); return _tile; } }
+        public static GUIStyle ButtonOff { get { Ensure(); return _buttonOff; } }
+        public static GUIStyle Field { get { Ensure(); return _field; } }
+        public static GUIStyle Bad { get { Ensure(); return _bad; } }
+        public static GUIStyle Good { get { Ensure(); return _good; } }
+        public static GUIStyle Wrap { get { Ensure(); return _wrap; } }
 
         /// <summary>Fills a rect with the panel background - for bars behind controls.</summary>
+        /// <summary>The minimum height one line of <paramref name="style"/> needs, INCLUDING the
+        /// descenders of letters like p, g and y.
+        ///
+        /// Every clipped label in this UI has had the same cause: a Rect height typed as a literal
+        /// that was correct for the font size of the day, and then the type grew. Sizes and the
+        /// layouts built around them are one decision, so the layout asks the style rather than
+        /// carrying a second, silently stale copy of the answer.</summary>
+        public static float LineH(GUIStyle style)
+        {
+            Ensure();
+            return style.CalcSize(new GUIContent("Ag")).y + 2f;
+        }
+
         public static void Backdrop(Rect rect)
         {
             Ensure();

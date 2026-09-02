@@ -27,14 +27,17 @@ from src.env.intersection import N_MOVEMENTS
 from src.ml.dqn import DQNAgent
 from src.ml.hybrid_wrapper import HYBRID_OBS_DIM, load_forecaster
 
-from src.provenance.official import OFFICIAL_LSTM  # noqa: E402
+from src.provenance.official import official_lstm_checked
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OUT_DIR = _REPO_ROOT / "data" / "lstm_dqn"
 _RUNS = _REPO_ROOT / "runs"
-_OFFICIAL_LSTM = (
-    OFFICIAL_LSTM
-)
+
+# The DQN training seed being traced. Drives BOTH the agent checkpoint path and the forecaster
+# pin below (src/provenance/official.py A6.4: the forecaster is pinned per DQN training seed) so
+# the two cannot drift apart - traces collected from seed 123's policy must be forecast with
+# seed 123's official LSTM, not some other seed's.
+TRACE_TRAIN_SEED = 123
 SCENARIOS = ["SCN-01", "SCN-03", "SCN-04", "SCN-06"]
 SEEDS = [0, 1, 2, 3, 4]
 _HEADER = (
@@ -47,7 +50,9 @@ _HEADER = (
 def _load_hybrid_agent() -> DQNAgent:
     import torch
     agent = DQNAgent(HYBRID_OBS_DIM)
-    state = torch.load(_RUNS / "hybrid_seed123" / "checkpoints" / "ep299.pt", map_location="cpu")
+    state = torch.load(
+        _RUNS / f"hybrid_seed{TRACE_TRAIN_SEED}" / "checkpoints" / "ep299.pt", map_location="cpu"
+    )
     agent.online.load_state_dict(state["online"])
     agent.online.eval()
     return agent
@@ -84,7 +89,7 @@ def main() -> None:
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     build_net()
     agent = _load_hybrid_agent()
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    forecaster = load_forecaster(str(official_lstm_checked(TRACE_TRAIN_SEED)))
     total = 0
     for scenario_id in SCENARIOS:
         for seed in SEEDS:

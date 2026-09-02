@@ -54,6 +54,12 @@ namespace SmartTraffic
         public string RunningScenario { get; private set; } = "-";
         public double SimTime { get; private set; }
 
+        // The finished episode has to be IDENTIFIABLE, not merely over. Without the run id there is
+        // no way to ask the hub for the KPIs it just computed, so "the episode ended" could never
+        // become "and here is what happened".
+        public string RunId { get; private set; } = "";
+        public int Seed { get; private set; }
+
         /// <param name="wsUrl">The ws/unity URL; the REST base is derived from it.</param>
         public SessionControl(string wsUrl)
         {
@@ -144,6 +150,8 @@ namespace SmartTraffic
             RunningController = (string)o["controller"] ?? "-";
             RunningScenario = (string)o["scenario"] ?? "-";
             SimTime = (double?)o["sim_time"] ?? 0d;
+            RunId = (string)o["run_id"] ?? "";
+            Seed = (int?)o["seed"] ?? 0;
         }
 
         private static string Detail(string body)

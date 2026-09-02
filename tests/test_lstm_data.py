@@ -79,9 +79,12 @@ def test_window_values_are_correctly_sliced(data_dir) -> None:
 
 
 def test_windows_per_file_count(data_dir) -> None:
-    """One file -> _WINDOWS_PER_FILE windows; train has 3 scenarios x 1 file."""
+    """One file -> _WINDOWS_PER_FILE windows; a split's total = its scenario count x 1 file."""
     assert len(LSTMDataset([data_dir / "scn_01_seed_00.csv"])) == _WINDOWS_PER_FILE
-    assert len(load_split("train", data_dir)) == 3 * _WINDOWS_PER_FILE
+    assert len(SPLITS["train"]) > 0  # guard: derived expectation below must be > 0
+    expected_train = len(SPLITS["train"]) * _WINDOWS_PER_FILE
+    assert expected_train > 0
+    assert len(load_split("train", data_dir)) == expected_train
 
 
 def test_no_leakage_across_files_or_splits(data_dir) -> None:
@@ -112,17 +115,61 @@ def test_dataloaders_batch(data_dir) -> None:
 
 
 def test_split_sizes_documented(data_dir) -> None:
-    sizes = split_sizes(data_dir)
-    assert sizes == {
-        "train": 3 * _WINDOWS_PER_FILE, "val": _WINDOWS_PER_FILE, "test": _WINDOWS_PER_FILE,
+    """Each split's window count = its scenario count x _WINDOWS_PER_FILE, derived from SPLITS."""
+    assert all(len(scenario_ids) > 0 for scenario_ids in SPLITS.values())  # guard: no empty split
+    expected = {
+        split: len(scenario_ids) * _WINDOWS_PER_FILE for split, scenario_ids in SPLITS.items()
     }
+    assert all(count > 0 for count in expected.values())  # guard: no zero-sized expectation
+    sizes = split_sizes(data_dir)
+    assert sizes == expected
 
 
 def test_real_data_if_present() -> None:
-    """If the real 50 CSVs exist, the split sizes are sane and disjoint-nonzero."""
+    """If the real CSVs exist, every split's size is sane (nonzero) and disjoint-nonzero."""
     from src.ml.lstm_data import _DATA_DIR
 
     if not list(_DATA_DIR.glob("scn_*_seed_*.csv")):
         pytest.skip("real LSTM CSVs not generated")
+    assert all(len(scenario_ids) > 0 for scenario_ids in SPLITS.values())  # guard: no empty split
     sizes = split_sizes()
-    assert sizes["train"] > sizes["val"] > 0 and sizes["test"] > 0
+    assert all(sizes[split] > 0 for split in SPLITS)
+
+
+# ------------------------------------------------------------------------------------------
+# The corpus can come from the database instead of the CSV directory
+# ------------------------------------------------------------------------------------------
+
+
+def test_db_and_csv_corpora_produce_identical_tensors() -> None:
+    """The load-bearing guarantee behind "training reads from the database".
+
+    The forecaster's published results were produced from the CSV directory. Moving the corpus
+    into SQLite is only a provenance change if the tensors are the SAME - otherwise it silently
+    retrains the model on subtly different data and every number in the report goes stale without
+    anything failing.
+
+    Order is asserted too, not just contents: window order decides which samples share a shuffled
+    batch, so a differently-ordered corpus is a different training run.
+    """
+    import torch
+
+    from src.ml.lstm_data import _DATA_DIR, load_split
+
+    if not list(_DATA_DIR.glob("scn_*_seed_*.csv")):
+        pytest.skip("real LSTM CSVs not generated")
+    try:
+        from_db = load_split("val", source="db")
+    except FileNotFoundError:
+        pytest.skip("corpus not ingested; run python -m scripts.ingest_lstm_corpus")
+
+    from_csv = load_split("val", source="csv")
+    assert len(from_db) == len(from_csv) > 0
+    assert from_db.window_sources == from_csv.window_sources
+    assert torch.equal(from_db._x, from_csv._x)
+    assert torch.equal(from_db._y, from_csv._y)
+
+
+def test_an_unknown_source_is_refused() -> None:
+    with pytest.raises(ValueError, match="unknown source"):
+        load_split("train", source="sqlite")

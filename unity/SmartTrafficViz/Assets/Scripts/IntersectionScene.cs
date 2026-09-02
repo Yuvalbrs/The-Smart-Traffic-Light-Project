@@ -54,12 +54,51 @@ namespace SmartTraffic
 
         private static Shader _shader;
 
-        internal static Shader LitShader =>
-            _shader != null
-                ? _shader
-                // Shader.Find at runtime rather than a serialised material: keeps the project free
-                // of .mat assets and works under whichever pipeline the editor is set to.
-                : _shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        /// <summary>Name of the material asset in Resources/ that pins a shader into the build.</summary>
+        internal const string PinnedMaterial = "ScenePinMaterial";
+
+        private static bool _shaderResolved;
+
+        internal static Shader LitShader
+        {
+            get
+            {
+                if (_shaderResolved) return _shader;
+                _shaderResolved = true;
+                return _shader = ResolveShader();
+            }
+        }
+
+        /// <summary>Find a usable shader, or null if the build genuinely has none.
+        ///
+        /// Resources FIRST, and that ordering is the whole point. `Shader.Find` alone returns null
+        /// in a player build for any shader no asset references - the Editor has every built-in
+        /// shader loaded, a build only ships what something points at. That is not hypothetical
+        /// here: the first standalone build threw `ArgumentNullException: Parameter name: shader`
+        /// on the very first Paint call, so BuildStatic never finished, the 3-D scene was never
+        /// created, and Update then NREd on the null socket every frame - 185 MB of log in an hour.
+        /// A material asset under Resources/ is what actually pins the shader in; the Find calls
+        /// below are the fallback, not the mechanism.</summary>
+        private static Shader ResolveShader()
+        {
+            var pinned = Resources.Load<Material>(PinnedMaterial);
+            if (pinned != null && pinned.shader != null) return pinned.shader;
+
+            foreach (var name in new[]
+                     {
+                         "Universal Render Pipeline/Lit", "Standard",
+                         "Legacy Shaders/Diffuse", "Sprites/Default",
+                     })
+            {
+                var found = Shader.Find(name);
+                if (found != null) return found;
+            }
+
+            Debug.LogError(
+                "[scene] no usable shader in this build - geometry will render with default " +
+                "materials. Expected Resources/" + PinnedMaterial + " to pin one.");
+            return null;
+        }
 
         public static Color ColorFor(string name)
         {
@@ -74,6 +113,9 @@ namespace SmartTraffic
         /// <summary>Builds ground, roads, markings and signal masts. Returns the root object.</summary>
         public static GameObject BuildStatic()
         {
+            // The previous scene's lights are gone; forget them before anything registers new
+            // ones, or the night switch would be driving destroyed objects.
+            DayNight.Reset();
             var root = new GameObject("Intersection");
 
             var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
@@ -93,7 +135,70 @@ namespace SmartTraffic
             Slab(root, "Arm_W", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(-armMid, 0f, 0f), Asphalt);
 
             BuildMarkings(root);
+            BuildStreetLamps(root);
             return root;
+        }
+
+        /// <summary>
+        /// Lamp columns down both verges of every arm.
+        ///
+        /// They are the reason the night mode is worth having: a scene lit only by a dim moon is
+        /// just a darker picture, whereas pools of warm light along the carriageway give the road
+        /// a shape after dark and make the signal aspects the brightest thing in frame - which is
+        /// exactly where the eye should be during this demo.
+        ///
+        /// Their point lights are switched by <see cref="DayNight"/> and are OFF by day; a scene
+        /// that leaves a dozen real-time lights burning in daylight pays for them and shows
+        /// nothing for it.
+        /// </summary>
+        private static void BuildStreetLamps(GameObject root)
+        {
+            var lamps = new GameObject("StreetLamps").transform;
+            lamps.SetParent(root.transform);
+
+            const float mastH = 9.5f;
+            const float reach = 3.2f;      // how far the arm leans out over the carriageway
+
+            for (var approach = 0; approach < 4; approach++)
+            {
+                var axis = AxisOf(approach);
+                var side = new Vector3(-axis.z, 0f, axis.x);
+
+                // Staggered down the arm, kept clear of the stop line so they never sit on top of
+                // a signal head.
+                for (var i = 0; i < 3; i++)
+                {
+                    var along = 46f + i * 38f;
+                    foreach (var kerb in new[] { 1f, -1f })
+                    {
+                        var at = axis * along + side * (kerb * (HalfRoad + 2.2f));
+                        var inward = -side * kerb;   // from the kerb towards the centreline
+
+                        Post(lamps, "LampMast", at, 0.22f, mastH, Metal);
+                        Slab(root, "LampArm",
+                            Box(side, reach, 0.22f, 0.22f),
+                            at + inward * (reach / 2f) + Vector3.up * mastH, Metal)
+                            .transform.SetParent(lamps);
+
+                        var headAt = at + inward * reach + Vector3.up * (mastH - 0.25f);
+                        var lens = Slab(root, "LampLens",
+                            new Vector3(1.5f, 0.32f, 1.5f), headAt,
+                            new Color(0.55f, 0.55f, 0.52f));
+                        lens.transform.SetParent(lamps);
+
+                        var lightGo = new GameObject("LampLight");
+                        lightGo.transform.SetParent(lamps);
+                        lightGo.transform.position = headAt - Vector3.up * 0.3f;
+                        var light = lightGo.AddComponent<Light>();
+                        light.type = LightType.Point;
+                        light.range = 34f;
+                        light.intensity = 2.1f;
+                        light.color = new Color(1.00f, 0.87f, 0.66f);
+
+                        DayNight.RegisterLamp(light, lens.GetComponent<Renderer>());
+                    }
+                }
+            }
         }
 
         /// <summary>Centre lines, lane dashes and stop bars - the cues that make flow readable.</summary>
@@ -199,9 +304,11 @@ namespace SmartTraffic
                 // inward (-axis), so that half lies along +side, and the kerb is at +HalfRoad.
                 var baseAt = axis * StopLine + side * (HalfRoad + 1.6f);
 
-                Slab(signals.gameObject, "Pole_" + approach,
-                    new Vector3(0.55f, poleH, 0.55f), baseAt + Vector3.up * (poleH / 2f), Metal)
-                    .transform.SetParent(signals);
+                // A round pole on a base plate rather than a square post. Signal poles are tubes,
+                // and a box post catching a hard edge of light is one of the things that made
+                // this read as a diagram rather than a street.
+                Post(signals, "Pole_" + approach, baseAt, 0.30f, poleH, Metal);
+                Post(signals, "PoleFoot_" + approach, baseAt, 0.62f, 0.7f, Metal);
 
                 Slab(signals.gameObject, "Beam_" + approach,
                     Size(axis, 0.4f, HalfRoad + 1.6f),
@@ -222,8 +329,27 @@ namespace SmartTraffic
                     // The housing. Deliberately oversized - a true 1.2 m head is a couple of
                     // pixels at the ~280 m camera range, and the aspect is the point of drawing it.
                     Slab(signals.gameObject, "Housing_" + id,
-                        new Vector3(2.1f, 6.4f, 1.3f), at + Vector3.up * (headTop - lampGap),
+                        Box(axis, 2.1f, 6.4f, 1.3f), at + Vector3.up * (headTop - lampGap),
                         new Color(0.12f, 0.13f, 0.14f)).transform.SetParent(signals);
+
+                    // A backboard around the aspects, as real heads have: it is what stops a lamp
+                    // washing out against whatever happens to be behind it.
+                    Slab(signals.gameObject, "Backboard_" + id,
+                        Box(axis, 2.9f, 7.4f, 0.18f),
+                        at + axis * 0.08f + Vector3.up * (headTop - lampGap),
+                        new Color(0.07f, 0.08f, 0.09f)).transform.SetParent(signals);
+
+                    // Visors. The hood over each aspect is the detail that most says "traffic
+                    // light" rather than "three coloured dots on a post", and it costs one slab
+                    // apiece: a thin lip standing proud of the head, just above each lamp.
+                    for (var lamp = 0; lamp < 3; lamp++)
+                    {
+                        Slab(signals.gameObject, "Visor_" + id + "_" + lamp,
+                            Box(axis, 2.4f, 0.16f, 1.6f),
+                            at + axis * 0.92f
+                               + Vector3.up * (headTop - lamp * lampGap + 0.92f),
+                            new Color(0.09f, 0.10f, 0.11f)).transform.SetParent(signals);
+                    }
 
                     var head = new SignalHead(mats)
                     {
@@ -267,18 +393,58 @@ namespace SmartTraffic
             Paint(disc, new Color(0.09f, 0.26f, 0.60f));
 
             // Rotation about local Z is counter-clockwise seen from +Z, so -90 sends the arrow to
-            // local +X and +90 to local -X.
-            var angle = turn == 0 ? -90f : turn == 2 ? 90f : 0f;
+            // local +X (the driver's left) and +90 to local -X (their right).
+            //
+            // The rightmost lane carries TWO movements, not one: intersection.con.xml connects
+            // lane 0 to both the through edge and the right edge. A lone right arrow above it
+            // describes a right-turn-only lane that does not exist, and makes a through-bound car
+            // waiting there look like a stuck vehicle. Two arrows say what the lane actually is.
+            if (turn == 2)
+            {
+                // ONE arrow with two heads on a shared stem, which is how a real shared-lane
+                // sign is drawn - the branch grows out of the shaft rather than sitting beside
+                // it. Two separate arrows read as two instructions; a combined arrow reads as
+                // "this lane does both", which is what lane 0 actually does (intersection.con.xml
+                // connects it to the through edge AND the right edge).
+                // Scale so the glyph's far CORNER lands inside the rim, not just its width: the
+                // branch tip sits low and left, and it was the diagonal that overran the disc.
+                var halfW = (ComboHalfWidth - ComboBranchTip) / 2f;
+                var corner = Mathf.Sqrt(halfW * halfW + ComboHalfHeight * ComboHalfHeight);
+                var fit = SignRadius * 0.82f / corner;   // 0.82 leaves a visible blue margin
+
+                var combo = new GameObject("Arrow");
+                // SetParent(sign, FALSE). The default overload keeps the object's WORLD transform
+                // and back-solves a local rotation to preserve it - so a glyph created with
+                // identity rotation stayed facing world +Z whatever way its sign pointed. On the
+                // north approach that happened to be correct; on east and west the sign was seen
+                // edge-on as a thin vertical sliver. AddArrow never hit this because it assigns
+                // localRotation straight afterwards, which overwrites the back-solved value.
+                combo.transform.SetParent(sign, false);
+                combo.transform.localPosition = new Vector3(ComboCentreX * fit, 0f, 0.30f);
+                combo.transform.localScale = Vector3.one * fit;
+                combo.AddComponent<MeshFilter>().sharedMesh = ComboArrowMesh;
+                combo.AddComponent<MeshRenderer>();
+                combo.GetComponent<Renderer>().sharedMaterial = ArrowMaterial;
+            }
+            else
+            {
+                AddArrow(sign, turn == 0 ? -90f : 0f, new Vector3(0f, 0f, 0.30f), 1.25f);
+            }
+        }
+
+        /// <summary>One white arrow glyph on a sign face.</summary>
+        /// <param name="offset">Local position. +Z, NOT -Z: local +Z faces the oncoming driver,
+        /// and on the far face the arrow only reads from behind the sign, mirrored. A Unity
+        /// cylinder is 2 units tall, so the disc's faces sit at local z = +-0.16; at +0.14 the
+        /// arrow sat INSIDE the disc and z-fought it into a blue-and-white mottle. Clear the
+        /// face.</param>
+        private static void AddArrow(Transform sign, float angle, Vector3 offset, float scale)
+        {
             var arrow = new GameObject("Arrow");
             arrow.transform.SetParent(sign);
-            // +Z, NOT -Z: local +Z faces the oncoming driver. Mounted on the far face the arrow is
-            // only visible from behind the sign, where left and right read mirrored.
-            // A Unity cylinder is 2 units tall, so localScale.y = 0.16 puts the disc's faces at
-            // local z = +-0.16. At +0.14 the arrow sat INSIDE the disc and z-fought with it,
-            // which renders as a blue-and-white mottle rather than a white arrow. Clear the face.
-            arrow.transform.localPosition = new Vector3(0f, 0f, 0.30f);
+            arrow.transform.localPosition = offset;
             arrow.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
-            arrow.transform.localScale = Vector3.one * 1.25f;
+            arrow.transform.localScale = Vector3.one * scale;
             arrow.AddComponent<MeshFilter>().sharedMesh = ArrowMesh;
             arrow.AddComponent<MeshRenderer>();
             // Emissive, not just white: the arrow is a vertical face with a horizontal normal, so
@@ -309,6 +475,110 @@ namespace SmartTraffic
         /// read as a wrench, not an arrow, because the barbs overshoot the shaft tip instead of
         /// meeting it. Double-sided with explicit normals so it lights correctly from either side.
         /// </summary>
+        // The combined glyph is not symmetric about x: it reaches ComboBranchTip to the left and
+        // only ComboHalfWidth to the right, so drawn at x=0 it hangs off one side of the disc.
+        // Both the centring shift and the scale are DERIVED from these, because the first version
+        // eyeballed them and the branch tip ended up outside the sign.
+        private const float ComboHalfWidth = 0.60f;    // straight head, +x extent
+        private const float ComboHalfHeight = 0.95f;
+        private const float ComboBranchTip = -1.10f;   // -x extent
+
+        /// <summary>Shift that puts the glyph's bounding box on the middle of the disc.</summary>
+        private const float ComboCentreX = -(ComboBranchTip + ComboHalfWidth) / 2f;
+
+        /// <summary>Disc radius: the cylinder is scaled to 3.4 across, so 1.7 out.</summary>
+        private const float SignRadius = 1.7f;
+
+        private static Mesh _comboArrow;
+
+        /// <summary>
+        /// A straight-ahead arrow with a right-turn branch off its shaft, as one connected shape.
+        ///
+        /// Drawn as overlapping pieces - shaft, top head, branch bar, branch head - rather than as
+        /// one traced outline. They are coplanar and share one flat emissive material, so the
+        /// silhouette is identical to a properly unioned polygon and the geometry is a fraction of
+        /// the work. The branch bar deliberately starts at x=0, inside the shaft, so the join is
+        /// solid with no seam at the corner.
+        ///
+        /// The branch runs to local -X because local +X is the driver's left (see BuildSign).
+        /// </summary>
+        private static Mesh ComboArrowMesh
+        {
+            get
+            {
+                if (_comboArrow != null) return _comboArrow;
+
+                const float w = 0.26f;      // half shaft width
+                const float hw = ComboHalfWidth;
+                const float y0 = -ComboHalfHeight;
+                const float yHead = 0.30f;  // where the top head begins
+                const float yTip = ComboHalfHeight;
+
+                const float yb = -0.30f;    // centre height of the branch
+                const float bEnd = -0.66f;  // where the branch bar stops
+                const float bTip = ComboBranchTip;
+                const float bhw = 0.48f;    // half head width, branch
+
+                var face = new[]
+                {
+                    // shaft
+                    new Vector3(-w, y0, 0f), new Vector3(w, y0, 0f),
+                    new Vector3(w, yHead, 0f), new Vector3(-w, yHead, 0f),
+                    // top head
+                    new Vector3(-hw, yHead, 0f), new Vector3(hw, yHead, 0f),
+                    new Vector3(0f, yTip, 0f),
+                    // branch bar, starting inside the shaft
+                    new Vector3(0f, yb - w, 0f), new Vector3(bEnd, yb - w, 0f),
+                    new Vector3(bEnd, yb + w, 0f), new Vector3(0f, yb + w, 0f),
+                    // branch head
+                    new Vector3(bEnd, yb + bhw, 0f), new Vector3(bEnd, yb - bhw, 0f),
+                    new Vector3(bTip, yb, 0f),
+                };
+                var faceTris = new[]
+                {
+                    0, 2, 1, 0, 3, 2,        // shaft
+                    4, 6, 5,                 // top head
+                    7, 9, 8, 7, 10, 9,       // branch bar
+                    11, 13, 12,              // branch head
+                };
+
+                _comboArrow = DoubleSided("ComboArrow", face, faceTris);
+                return _comboArrow;
+            }
+        }
+
+        /// <summary>
+        /// A flat face, emitted front and back with opposite winding and explicit normals.
+        ///
+        /// These signs are vertical faces with horizontal normals, so a single-sided quad vanishes
+        /// from behind and the overhead key light barely grazes either side - which is why the
+        /// material is emissive rather than white paint.
+        /// </summary>
+        private static Mesh DoubleSided(string name, Vector3[] face, int[] faceTris)
+        {
+            var verts = new Vector3[face.Length * 2];
+            var norms = new Vector3[face.Length * 2];
+            var tris = new int[faceTris.Length * 2];
+            for (var i = 0; i < face.Length; i++)
+            {
+                verts[i] = face[i];
+                verts[i + face.Length] = face[i];
+                norms[i] = Vector3.forward;
+                norms[i + face.Length] = Vector3.back;
+            }
+            for (var i = 0; i < faceTris.Length; i++) tris[i] = faceTris[i];
+            for (var i = 0; i < faceTris.Length; i += 3)
+            {
+                tris[faceTris.Length + i] = faceTris[i] + face.Length;
+                tris[faceTris.Length + i + 1] = faceTris[i + 2] + face.Length;
+                tris[faceTris.Length + i + 2] = faceTris[i + 1] + face.Length;
+            }
+
+            var mesh = new Mesh { name = name, vertices = verts, normals = norms, triangles = tris };
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
         private static Mesh ArrowMesh
         {
             get
@@ -387,6 +657,35 @@ namespace SmartTraffic
                 : new Vector3(along, 0.3f, across);
         }
 
+        /// <summary>
+        /// <see cref="Size"/> with a real height: a box whose width runs ACROSS the approach and
+        /// whose depth runs ALONG it, for either axis.
+        ///
+        /// Needed because <c>Size</c> pins y to 0.3 - it was written for flat road markings - so
+        /// anything with height was previously given a fixed world-space size and came out rotated
+        /// 90 degrees on the east and west approaches.
+        /// </summary>
+        private static Vector3 Box(Vector3 axis, float across, float height, float along)
+        {
+            return Mathf.Abs(axis.z) > 0.5f
+                ? new Vector3(across, height, along)
+                : new Vector3(along, height, across);
+        }
+
+        /// <summary>A vertical cylinder: signal poles are tubes, not square posts.</summary>
+        private static void Post(Transform parent, string name, Vector3 at, float radius,
+            float height, Color color)
+        {
+            var post = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            post.name = name;
+            post.transform.SetParent(parent);
+            // Unity's cylinder is 2 units tall, so the y scale is HALF the height.
+            post.transform.localScale = new Vector3(radius * 2f, height / 2f, radius * 2f);
+            post.transform.position = at + Vector3.up * (height / 2f);
+            Object.Destroy(post.GetComponent<Collider>());
+            Paint(post, color);
+        }
+
         private static void Marking(Transform parent, string name, Vector3 centre,
             float across, float along, Vector3 axis)
         {
@@ -423,6 +722,9 @@ namespace SmartTraffic
         /// </summary>
         public static void Paint(GameObject go, Color color)
         {
+            // A null shader means this build shipped none. Leaving the default material is ugly;
+            // `new Material(null)` throws and takes the entire scene build down with it.
+            if (LitShader == null) return;
             // `mat == null` also catches a Material destroyed when Play mode last exited: the
             // dictionary is static and survives that, so a stale entry would otherwise be handed
             // out on the next Play whenever domain reload is turned off.

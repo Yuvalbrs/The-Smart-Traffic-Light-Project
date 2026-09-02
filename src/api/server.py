@@ -4,6 +4,19 @@ Routes::
 
     GET    /health                  liveness + loop lag + per-channel backpressure counters
     GET    /controllers             what can be driven, and on which scenarios
+    GET    /models                  every trained model on disk (see :mod:`src.api.catalog`)
+    GET    /comparison              per-controller KPIs on one scenario, from the database
+    POST   /training                start a training job (409 if one is already running)
+    GET    /training/current        progress of the running / last training job
+    DELETE /training/current        cancel the running training job
+    WS     /ws/training             live training progress frames
+    POST   /evaluation              evaluate one user-trained model against the baselines
+    GET    /evaluation/current      progress of the running / last evaluation
+    DELETE /evaluation/current      cancel the running evaluation
+    WS     /ws/evaluation           live evaluation progress frames
+    GET    /viewer                  is the Unity 3D viewer built, and is it running?
+    POST   /viewer                  launch the Unity 3D viewer beside the dashboard
+    DELETE /viewer                  close it
     POST   /sessions                start a live episode  (409 if one is already running)
     GET    /sessions/current        status of the running / last session
     DELETE /sessions/current        stop the running session
@@ -28,18 +41,37 @@ from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from src.api.catalog import router as catalog_router
+from src.api.evaluation import MAX_UI_SEEDS, EvaluationManager
 from src.api.hub import MAX_QUEUE, Hub
 from src.api.live import CONTROLLERS, SessionBusyError, SessionManager
 from src.api.replay import router as replay_router
+from src.api.jobs import JobBusyError
+from src.api.training import MAX_UI_EPISODES, VARIANTS, TrainingBusyError, TrainingManager
+from src.api.viewer import ViewerManager
 from src.api.wire import SCHEMA_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DB_PATH = _REPO_ROOT / "data" / "traffic.db"
 _TRACE_DIRS = [_REPO_ROOT / "data" / "live", _REPO_ROOT / "data" / "eval"]
 
-SCENARIOS = ("SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05")
+# Every single-intersection scenario, not just the five the experiment measures. These are two
+# different lists for two different jobs: this one is what the live demo may SHOW, while
+# scripts/eval_runner.py::CONFIRMATORY_SCENARIOS is what the experiment may MEASURE and is pinned
+# by the pre-registration - widening that one would corrupt a pre-registered result, so it stays at
+# five. SCN-A1..A4 are excluded because they need the two-junction arterial network this hub does
+# not build; `load_all()` reports is_arterial=True for exactly those four.
+SCENARIOS = (
+    "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
+    "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
+    # Demand read from the demand_count table (measured, Hangzhou 1x1) rather than from a curve.
+    # Needs `python -m scripts.ingest_demand` to have been run; a session on it fails with a
+    # message saying so, which is the honest behaviour for a scenario whose data may be absent.
+    "SCN-R1",
+)
 
 
 class StartSession(BaseModel):
@@ -58,15 +90,59 @@ class StartSession(BaseModel):
     )
 
 
+class StartTraining(BaseModel):
+    """Body of ``POST /training``."""
+
+    variant: str = Field("plain", description="plain | hybrid | random-lstm")
+    seed: int = Field(42, ge=0, description="training seed; hybrid loads THIS seed's forecaster")
+    episodes: int = Field(
+        30, ge=1, le=MAX_UI_EPISODES,
+        description=f"episodes to train (1-{MAX_UI_EPISODES}); 30 is a demo, 300 the full protocol",
+    )
+    episode_length_s: int | None = Field(
+        None, ge=60, le=3600, description="shorten each episode for a faster demo run"
+    )
+    label: str | None = Field(None, max_length=80, description="free-text label for this run")
+    train_scenarios: list[str] | None = Field(
+        None,
+        min_length=1,
+        max_length=len(SCENARIOS),
+        description=(
+            "scenarios whose demand drives training; None keeps train_dqn's default rotation "
+            "(SCN-01/02/03). Pass ['SCN-R1'] to train against real measured Hangzhou counts."
+        ),
+    )
+
+
+class StartEvaluation(BaseModel):
+    """Body of ``POST /evaluation``."""
+
+    model_id: str = Field(..., description="a run-directory name from GET /models")
+    scenario: str = Field("SCN-05", description="scenario to evaluate on")
+    seeds: int = Field(
+        5, ge=1, le=MAX_UI_SEEDS,
+        description=f"held-out eval seeds to use (1-{MAX_UI_SEEDS}); the campaign uses 15",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Bind the hubs to the running event loop and open the results database."""
     loop = asyncio.get_running_loop()
     app.state.unity_hub.bind_loop(loop)
     app.state.dash_hub.bind_loop(loop)
+    app.state.training_hub.bind_loop(loop)
+    app.state.evaluation_hub.bind_loop(loop)
     yield
     manager: SessionManager = app.state.sessions
     manager.stop()
+    # A training child process outlives its parent unless it is asked to stop, which would leave
+    # an orphan holding a SUMO instance and a run directory after the server is gone.
+    app.state.training.stop()
+    app.state.evaluation.stop()
+    # The viewer is a window the user opened from the app; closing the app closes it too, rather
+    # than leaving an orphaned 3D window connected to a hub that no longer exists.
+    app.state.viewer.stop()
 
 
 def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None) -> FastAPI:
@@ -98,7 +174,12 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     )
     app.state.unity_hub = Hub("unity")
     app.state.dash_hub = Hub("dash")
+    app.state.training_hub = Hub("training")
+    app.state.evaluation_hub = Hub("evaluation")
     app.state.sessions = SessionManager(app.state.unity_hub, app.state.dash_hub)
+    app.state.training = TrainingManager(app.state.training_hub)
+    app.state.evaluation = EvaluationManager(app.state.evaluation_hub)
+    app.state.viewer = ViewerManager()
     app.state.trace_dirs = list(trace_dirs) if trace_dirs is not None else list(_TRACE_DIRS)
     path = Path(db_path) if db_path is not None else _DB_PATH
     # Create the engine unconditionally: SQLite makes the file on first write, and gating
@@ -109,6 +190,7 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     app.state.engine = create_db_engine(path)
     app.state.db_path = path
     app.include_router(replay_router)
+    app.include_router(catalog_router)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -126,7 +208,8 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
                     "dropped": hub.dropped_total,
                     "queue_maxsize": MAX_QUEUE,
                 }
-                for hub in (app.state.dash_hub, app.state.unity_hub)
+                for hub in (app.state.dash_hub, app.state.unity_hub,
+                            app.state.training_hub, app.state.evaluation_hub)
             },
         }
 
@@ -193,6 +276,130 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
         response.status_code = 204
         return None
 
+
+    @app.post("/training", status_code=201)
+    def start_training(body: StartTraining) -> dict[str, Any]:
+        """Start one training job as a child process. 409 while another is running.
+
+        A live episode may run at the same time: the job is a separate process with its own
+        libsumo, so the single-instance rule that serializes live sessions does not apply here.
+        Both will simply be slower while they share the machine.
+        """
+        if body.variant not in VARIANTS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown variant {body.variant}; expected one of {list(VARIANTS)}",
+            )
+        for scn in body.train_scenarios or ():
+            if scn not in SCENARIOS:
+                raise HTTPException(
+                    status_code=422, detail=f"unknown training scenario {scn}"
+                )
+        try:
+            status = app.state.training.start(
+                variant=body.variant,
+                seed=body.seed,
+                episodes=body.episodes,
+                episode_length_s=body.episode_length_s,
+                label=body.label,
+                train_scenarios=tuple(body.train_scenarios) if body.train_scenarios else None,
+            )
+        except TrainingBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, KeyError) as exc:
+            # KeyError is the per-seed forecaster pin refusing an unpinned seed (A6.4) - a 422,
+            # not a 500: the request named a seed the project has no forecaster for.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return status.as_dict()
+
+    @app.get("/training/current")
+    def current_training() -> dict[str, Any]:
+        """Progress of the running (or most recent) training job."""
+        job = app.state.training.current
+        if job is None:
+            raise HTTPException(status_code=404, detail="no training job has been started")
+        return job.status.as_dict()
+
+    @app.delete("/training/current")
+    def stop_training(response: Response) -> dict[str, Any] | None:
+        """Cancel the running training job.
+
+        Mirrors DELETE /sessions/current: 204 once the child is gone, 202 while it is still
+        unwinding inside a native SUMO call.
+        """
+        outcome = app.state.training.stop()
+        if outcome is False:
+            raise HTTPException(status_code=404, detail="no training job is running")
+        if outcome is None:
+            response.status_code = 202
+            return {"status": "stopping", "detail": "cancel requested; the job has not exited yet"}
+        response.status_code = 204
+        return None
+
+
+    @app.post("/evaluation", status_code=201)
+    def start_evaluation(body: StartEvaluation) -> dict[str, Any]:
+        """Evaluate one user-trained model against the baselines on shared seeds.
+
+        This is what lets a model trained in the app reach the comparison at all: the comparison
+        reads evaluation rows, and training alone produces none.
+        """
+        if body.scenario not in SCENARIOS:
+            raise HTTPException(status_code=422, detail="unknown scenario " + body.scenario)
+        try:
+            status = app.state.evaluation.start(
+                model_id=body.model_id, scenario=body.scenario, seeds=body.seeds
+            )
+        except JobBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return status.as_dict()
+
+    @app.get("/evaluation/current")
+    def current_evaluation() -> dict[str, Any]:
+        """Progress of the running (or most recent) evaluation."""
+        status = app.state.evaluation.current
+        if status is None:
+            raise HTTPException(status_code=404, detail="no evaluation has been started")
+        return status.as_dict()
+
+    @app.delete("/evaluation/current")
+    def stop_evaluation(response: Response) -> dict[str, Any] | None:
+        """Cancel the running evaluation (204 gone, 202 still unwinding)."""
+        outcome = app.state.evaluation.stop()
+        if outcome is False:
+            raise HTTPException(status_code=404, detail="no evaluation is running")
+        if outcome is None:
+            response.status_code = 202
+            return {"status": "stopping", "detail": "cancel requested; the job has not exited yet"}
+        response.status_code = 204
+        return None
+
+
+    @app.get("/viewer")
+    def viewer_status() -> dict[str, Any]:
+        """Whether the Unity viewer can be launched, and whether it already is."""
+        return app.state.viewer.status()
+
+    @app.post("/viewer", status_code=201)
+    def start_viewer() -> dict[str, Any]:
+        """Open the Unity 3D window beside the dashboard, on the same 1 Hz feed."""
+        try:
+            return app.state.viewer.start()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/viewer")
+    def stop_viewer(response: Response) -> dict[str, Any] | None:
+        """Close the viewer window."""
+        if not app.state.viewer.stop():
+            raise HTTPException(status_code=404, detail="the viewer is not running")
+        response.status_code = 204
+        return None
+
     async def _pump(websocket: WebSocket, hub: Hub, name: str) -> None:
         """Relay one hub's frames to one client until it disconnects."""
         await websocket.accept()
@@ -220,6 +427,27 @@ def create_app(db_path: Path | None = None, trace_dirs: list[Path] | None = None
     async def ws_unity(websocket: WebSocket) -> None:
         """1 Hz raw ``sim_frame`` envelopes - the same frames the JSONL trace records."""
         await _pump(websocket, app.state.unity_hub, "unity")
+
+
+    @app.websocket("/ws/evaluation")
+    async def ws_evaluation(websocket: WebSocket) -> None:
+        """Evaluation progress frames, one per completed episode."""
+        await _pump(websocket, app.state.evaluation_hub, "evaluation")
+
+    @app.websocket("/ws/training")
+    async def ws_training(websocket: WebSocket) -> None:
+        """Training progress frames, one per completed episode."""
+        await _pump(websocket, app.state.training_hub, "training")
+
+
+    # The built single-page app is mounted LAST and only if it exists. Mounting at "/" catches
+    # every path not already claimed above, so registering it earlier would shadow the whole API;
+    # and a missing dist/ must leave the API perfectly usable, because that is the state during
+    # frontend development, when Vite serves the SPA on its own port instead.
+    dist = _REPO_ROOT / "frontend" / "dist"
+    if dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="app")
+    app.state.spa_dir = dist if dist.is_dir() else None
 
     return app
 

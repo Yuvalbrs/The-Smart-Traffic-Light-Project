@@ -27,6 +27,9 @@ EXPECTED_IDS = [
     "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05",
     "SCN-06", "SCN-07", "SCN-08", "SCN-09", "SCN-10",
     "SCN-A1", "SCN-A2", "SCN-A3", "SCN-A4",
+    # The only scenario whose demand is MEASURED rather than chosen: its arrival rates come from
+    # the demand_count table (Hangzhou 1x1 benchmark), not from a formula in the file.
+    "SCN-R1",
 ]
 
 
@@ -38,7 +41,7 @@ def test_scenarios_load() -> None:
 
 
 def test_each_scenario_well_formed() -> None:
-    profiles = {"constant", "ramp", "sinusoidal"}
+    profiles = {"constant", "ramp", "sinusoidal", "tabular"}
     for s in load_all():
         assert s.duration_s > 0
         assert len(s.seeds) == 10

@@ -1,12 +1,12 @@
 # C2/H2 - DQN-hybrid vs DQN-plain, SCN-05 (7 hypotheses, Holm-Bonferroni)
 
-| kpi | kpi_col | direction | headline | comparison | n | dropped | median_diff | ci_lo | ci_hi | p_raw | p_holm | stars | significant | family_size |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| avg_wait | avg_waiting_time | lower | True | DQN-plain | 7 | 8 | -1.2792819523774197 | -2.706395048994327 | 8.952056119980648 | 0.9375 | 1.0 |    | False | 7 |
-| avg_queue | avg_queue_length | lower | False | DQN-plain | 7 | 8 | -163.01999394122996 | -183.94335049984852 | -137.97091790366554 | 0.21875 | 1.0 |    | False | 7 |
-| throughput | throughput | higher | True | DQN-plain | 7 | 8 | 1131.0 | 800.0 | 1365.0 | 0.296875 | 1.0 |    | False | 7 |
-| num_stops | num_stops | lower | False | DQN-plain | 7 | 8 | -0.2662117053631037 | -0.9508968418658859 | 0.1583454281567489 | 0.375 | 1.0 |    | False | 7 |
-| fairness_std(5a) | fairness_std | lower | False | DQN-plain | 7 | 8 | 12.362813809424694 | -0.3511035297544316 | 14.822226456393945 | 0.109375 | 0.765625 |    | False | 7 |
-| worst_max(5b) | worst_movement_max_wait | lower | True | DQN-plain | 7 | 8 | 130.0 | -30.0 | 400.0 | 0.109375 | 0.765625 |    | False | 7 |
-| wait_p95 | wait_p95 | lower | False | DQN-plain | 7 | 8 | 2.900000000000034 | -19.0 | 41.64999999999987 | 0.6875 | 1.0 |    | False | 7 |
+| kpi | kpi_col | direction | headline | comparison | n | dropped | sd_train_seed | censored_a | censored_b | imputed | median_diff | ci_lo | ci_hi | effect_source | p_raw | undecidable | n_eff | n_observed | fully_imputed | n_cc | dropped_cc | p_raw_cc | p_holm | p_holm_cc | stars | significant | significant_cc | agrees | family_size | family_size_used | min_testable_n | family_testable |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| avg_wait | avg_waiting_time | lower | True | DQN-plain | 15 | 0 | 0.7971766999616356 | 0 | 0 | 0 | 0.6242127361791461 | 0.4797619047619044 | 0.8361891706648379 | primary | 0.0006103515625 | False | 15 | 15 | False | 15 | 0 | 0.0006103515625 | 0.003662109375 | 0.003662109375 | \*\* | True | True | True | 7 | 7 | 9 | 7 |
+| avg_queue | avg_queue_length | lower | False | DQN-plain | 15 | 0 | 0.33949011438291177 | 0 | 0 | 0 | 0.25093406038574173 | 0.2255882055942653 | 0.3954029082096295 | primary | 0.0006103515625 | False | 15 | 15 | False | 15 | 0 | 0.0006103515625 | 0.003662109375 | 0.003662109375 | \*\* | True | True | True | 7 | 7 | 9 | 7 |
+| throughput | throughput | higher | True | DQN-plain | 15 | 0 | 3.1492387844007528 | 0 | 0 | 0 | 0.33333333333325754 | -0.33333333333325754 | 1.333333333333485 | primary | 0.36222682056180844 | False | 13 | 15 | False | 15 | 0 | 0.36222682056180844 | 0.36222682056180844 | 0.36222682056180844 |    | False | False | True | 7 | 7 | 9 | 7 |
+| num_stops | num_stops | lower | False | DQN-plain | 15 | 0 | 0.013295547879967685 | 0 | 0 | 0 | 0.006428571428571561 | 0.0006978367062108193 | 0.017261488220200683 | primary | 0.0301513671875 | False | 15 | 15 | False | 15 | 0 | 0.0301513671875 | 0.0904541015625 | 0.0904541015625 |    | False | False | True | 7 | 7 | 9 | 7 |
+| fairness_std(5a) | fairness_std | lower | False | DQN-plain | 15 | 0 | 1.0403321041049571 | 0 | 0 | 0 | 1.4928281931220084 | 1.0302621882217267 | 1.786975017740276 | primary | 6.103515625e-05 | False | 15 | 15 | False | 15 | 0 | 6.103515625e-05 | 0.00042724609375 | 0.00042724609375 | \*\* | True | True | True | 7 | 7 | 9 | 7 |
+| worst_max(5b) | worst_movement_max_wait | lower | True | DQN-plain | 15 | 0 | 2.651219292168963 | 0 | 0 | 0 | 1.3333333333333286 | -1.0 | 2.666666666666657 | primary | 0.052753070277558656 | False | 15 | 15 | False | 15 | 0 | 0.052753070277558656 | 0.10550614055511731 | 0.10550614055511731 |    | False | False | True | 7 | 7 | 9 | 7 |
+| wait_p95 | wait_p95 | lower | False | DQN-plain | 15 | 0 | 2.7518497074601447 | 0 | 0 | 0 | 2.0 | 0.6991666666666347 | 3.466666666666697 | primary | 0.01025390625 | False | 15 | 15 | False | 15 | 0 | 0.01025390625 | 0.041015625 | 0.041015625 | \*  | True | True | True | 7 | 7 | 9 | 7 |
 

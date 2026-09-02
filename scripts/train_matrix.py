@@ -33,31 +33,36 @@ from scripts.build_network import build_net
 from scripts.env_factory import build_env
 from src.ml.hybrid_wrapper import load_forecaster, random_forecaster
 from src.ml.train_loop import TrainConfig, train
-from src.provenance.official import OFFICIAL_LSTM, official_lstm_version
+from src.provenance.official import (
+    official_lstm_checked,
+    official_lstm_filename,
+    official_lstm_version,
+)
 from src.provenance.versions import git_sha
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUNS_DIR = _REPO_ROOT / "runs"
-_OFFICIAL_LSTM = OFFICIAL_LSTM  # src/provenance/official.py
 SEEDS = (42, 123, 2024)
 VARIANTS = ("plain", "hybrid", "random-lstm")
 
 
 def _forecaster_for(variant: str, seed: int):
-    """Return ``(forecaster_or_None, provenance_label)`` for a variant."""
+    """Return ``(forecaster_or_None, provenance_label)`` for a variant.
+
+    The pin is per DQN training seed (A6.4): cell (variant, seed) must load the
+    forecaster trained under that same seed, not some single shared checkpoint.
+    """
     if variant == "plain":
         return None, None
-    if not _OFFICIAL_LSTM.exists():
-        raise FileNotFoundError(
-            f"{variant} needs the forecaster checkpoint at {_OFFICIAL_LSTM} "
-            "(regenerate via scripts/train_lstm.py - it is gitignored)."
-        )
     if variant == "hybrid":
-        return load_forecaster(str(_OFFICIAL_LSTM)), _OFFICIAL_LSTM.name
+        # official_lstm_checked(seed) already raises a clear FileNotFoundError for a
+        # missing pinned checkpoint - no need to duplicate that check here.
+        return load_forecaster(str(official_lstm_checked(seed))), official_lstm_filename(seed)
     if variant == "random-lstm":
-        # scale-matched to the deployed forecaster: without its input stats the control
-        # arm's forecast dims arrive in raw vehicle units (see random_forecaster docstring)
-        official = load_forecaster(str(_OFFICIAL_LSTM))
+        # scale-matched to THIS seed's deployed forecaster: random_forecaster is already
+        # seeded with `seed`, and its stats source must be the same seed's forecaster or
+        # the control arm would be scale-matched to a different training run's checkpoint.
+        official = load_forecaster(str(official_lstm_checked(seed)))
         return random_forecaster(seed=seed, stats_from=official), "random-lstm"
     raise ValueError(f"unknown variant {variant!r}")
 
@@ -93,7 +98,7 @@ def _run_cell(variant: str, seed: int, args: argparse.Namespace, sha: str) -> di
         lstm_version=(
             "" if variant == "plain"
             else "random-lstm" if variant == "random-lstm"
-            else official_lstm_version()
+            else official_lstm_version(seed)
         ),
         validation_every=args.validation_every,
         git_sha=sha,

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import uuid
 from pathlib import Path
@@ -68,6 +69,7 @@ def data_version(
     generator_git_sha: str,
     generation_seed: int,
     sumo_version: str,
+    dataset_key: str = "",
 ) -> str:
     """Return the deterministic ``data_version`` string.
 
@@ -81,22 +83,27 @@ def data_version(
         Seed used to generate the dataset.
     sumo_version : str
         Pinned SUMO version string.
+    dataset_key : str, optional
+        Identifier of the specific dataset within the generation run - for the LSTM corpus,
+        the scenario id. Without it the four inputs above are shared by every scenario at a
+        given seed, so ten genuinely different CSVs were all labelled with ONE data_version.
+        Omitted (empty) it is excluded from the digest, so ids minted before this parameter
+        existed are unchanged.
 
     Returns
     -------
     str
         ``"data-<12 hex>"`` - identical inputs always yield the same value.
     """
-    digest = _sha256_hex(
-        _canonical(
-            {
-                "scenario_configs_hash": scenario_configs_hash,
-                "generator_git_sha": generator_git_sha,
-                "generation_seed": generation_seed,
-                "sumo_version": sumo_version,
-            }
-        )
-    )[:_HASH_LEN]
+    inputs = {
+        "scenario_configs_hash": scenario_configs_hash,
+        "generator_git_sha": generator_git_sha,
+        "generation_seed": generation_seed,
+        "sumo_version": sumo_version,
+    }
+    if dataset_key:  # absent -> digest unchanged from before this parameter existed
+        inputs["dataset_key"] = dataset_key
+    digest = _sha256_hex(_canonical(inputs))[:_HASH_LEN]
     return f"data-{digest}"
 
 
@@ -160,6 +167,15 @@ def git_sha(repo_root: str | Path = _REPO_ROOT, *, short: bool = False) -> str |
         out = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return out.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
+        # No git available. In a container that is the NORMAL case - the image ships source, not a
+        # repository - and returning None silently drops the provenance stamp from every run made
+        # inside it. That is worse than it looks: /comparison selects the newest git_sha for a
+        # mode, and NULL never matches in SQL, so a single unstamped run can make an entire mode
+        # read as "no episodes recorded". The image bakes the commit in at build time instead
+        # (Dockerfile: ARG GIT_SHA -> ENV SMART_TRAFFIC_GIT_SHA).
+        baked = os.environ.get("SMART_TRAFFIC_GIT_SHA", "").strip()
+        if baked:
+            return baked[:7] if short else baked
         return None
 
 

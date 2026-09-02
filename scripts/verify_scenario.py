@@ -20,7 +20,8 @@ import numpy as np
 
 from scripts.build_actuated import build_actuated_add
 from scripts.build_network import build_net
-from scripts.eval_runner import _OFFICIAL_LSTM, Algo, _load_agent, run_eval_episode
+from scripts.eval_runner import Algo, _load_agent, run_eval_episode
+from src.provenance.official import official_lstm_checked
 from src.baselines.max_pressure import MaxPressureController  # noqa: F401 (kept for parity)
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
 from src.ml.hybrid_wrapper import load_forecaster
@@ -28,6 +29,11 @@ from src.scenarios.config import AxisDemand, Scenario
 
 _OUT = Path(__file__).resolve().parent.parent / "data" / "eval" / "calib"
 _RUNS = Path(__file__).resolve().parent.parent / "runs"
+
+# The hybrid agent under test here is seed 123 (see module docstring), so its forecaster must be
+# seed 123's official pin (src/provenance/official.py A6.4: pinned per DQN training seed) - one
+# constant drives both the checkpoint path and the forecaster lookup so they cannot drift apart.
+TRAIN_SEED = 123
 SEEDS = [0, 1, 2, 3, 4, 5]
 TURN = {"left": 0.2, "through": 0.6, "right": 0.2}
 
@@ -53,9 +59,9 @@ def main() -> None:
     build_net()
     build_actuated_add()
 
-    plain = _load_agent(_RUNS / "plain_seed123" / "checkpoints" / "ep299.pt", 20)
-    hybrid = _load_agent(_RUNS / "hybrid_seed123" / "checkpoints" / "ep299.pt", 56)
-    forecaster = load_forecaster(str(_OFFICIAL_LSTM))
+    plain = _load_agent(_RUNS / f"plain_seed{TRAIN_SEED}" / "checkpoints" / "ep299.pt", 20)
+    hybrid = _load_agent(_RUNS / f"hybrid_seed{TRAIN_SEED}" / "checkpoints" / "ep299.pt", 56)
+    forecaster = load_forecaster(str(official_lstm_checked(TRAIN_SEED)))
 
     print(f"{'candidate':16}  webster  actuated  dqn-plain  dqn-hybrid   (gridlock-censor % over 6 seeds)")
     print("-" * 86)

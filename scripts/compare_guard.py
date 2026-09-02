@@ -26,7 +26,7 @@ from scripts.build_actuated import build_actuated_add
 from scripts.build_network import build_net
 from scripts.eval_runner import Algo, _load_agent, run_eval_episode
 from src.baselines.webster import WebsterController, webster_plan_for_scenario
-from src.env.intersection import _VAULT_MOVEMENTS, load_phase_movements
+from src.env.intersection import MOVEMENTS_SPEC, load_phase_movements
 from src.scenarios.config import SCENARIO_DIR, load_scenario
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -89,7 +89,7 @@ def main() -> None:
     _OUT.mkdir(parents=True, exist_ok=True)
     build_net()
     build_actuated_add()
-    phase_mv = load_phase_movements(_VAULT_MOVEMENTS)
+    phase_mv = load_phase_movements(MOVEMENTS_SPEC)
     plain = {s: _load_agent(_RUNS / f"plain_seed{s}" / "checkpoints" / "ep299.pt", 20) for s in SEEDS}
 
     for scn_id in args.scenarios:

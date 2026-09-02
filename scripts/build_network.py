@@ -60,9 +60,15 @@ _BINDING_FILE = _NET_DIR / "link_index_binding.yaml"
 # repo intentionally does NOT vendor a copy (anti-drift rule, decisions.md);
 # override with --movements if the vault moves. See harsh-review note on this
 # coupling.
-_VAULT_MOVEMENTS = Path(
-    r"C:\Year3\Obsidian\Yuval\30_Projects\smart-traffic-rl\specs\movements.yaml"
-)
+# The movement + NEMA phase spec. Authored in the Obsidian vault (the SSOT for the written
+# design) and SHIPPED HERE, because the runtime must not depend on a folder outside the repo.
+#
+# It used to point at C:\Year3\Obsidian\... directly. build_net() is called on EVERY live
+# session start, so on any machine but the author's - a clone, a marker's laptop, CI - every
+# episode died with FileNotFoundError before it began, for every controller including the
+# baselines that need no checkpoint. tests/test_network.py has always skipped when the vault was
+# absent, so nothing caught it. tests/test_movements_spec.py now proves the two copies agree.
+MOVEMENTS_SPEC = _REPO_ROOT / "config" / "movements.yaml"
 
 TLS_ID = "C"  # legacy single-intersection TLS
 
@@ -147,7 +153,7 @@ ARTERIAL = NetworkSpec(
 NETWORKS: dict[str, NetworkSpec] = {"intersection": SINGLE, "arterial": ARTERIAL}
 
 
-def build_net(network: NetworkSpec = SINGLE, movements_path: Path = _VAULT_MOVEMENTS) -> None:
+def build_net(network: NetworkSpec = SINGLE, movements_path: Path = MOVEMENTS_SPEC) -> None:
     """Compile ``network`` with ``netconvert`` (normalization disabled so the
     origin junction stays at (0,0) and ``netOffset`` is ``(0, 0)``).
 
@@ -484,7 +490,7 @@ def write_binding_file(
 
 
 def _build_and_bind(
-    network: NetworkSpec, movements: dict, movements_path: Path = _VAULT_MOVEMENTS
+    network: NetworkSpec, movements: dict, movements_path: Path = MOVEMENTS_SPEC
 ) -> None:
     """Build one network, run all assertions, write its binding, print the table."""
     print(f"[net] building {network.net_file.name} via netconvert ...")
@@ -518,7 +524,7 @@ def main() -> None:
     """Build the net(s), run all assertions, write the bindings, exit 0 on success."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--movements", type=Path, default=_VAULT_MOVEMENTS,
+        "--movements", type=Path, default=MOVEMENTS_SPEC,
         help="path to the authoritative movements.yaml (default: vault SSOT)",
     )
     parser.add_argument(

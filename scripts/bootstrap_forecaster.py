@@ -30,12 +30,19 @@ from src.ml.hybrid_wrapper import load_forecaster
 from src.ml.lstm_data import _DATA_DIR, LSTMDataset, files_for_split
 from src.ml.lstm_model import LSTMForecaster, skill_scores
 
+from src.provenance.official import official_lstm_checked
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DQN_DIR = _REPO_ROOT / "data" / "lstm_dqn"
 _CKPT_DIR = _REPO_ROOT / "checkpoints" / "lstm"
-from src.provenance.official import OFFICIAL_LSTM
 
-_OFFICIAL = OFFICIAL_LSTM
+# This probe has no DQN-training-seed concept of its own - it is a standalone distribution-shift
+# check on the LSTM, not a hybrid-agent run - but the forecaster is now pinned per DQN training
+# seed (src/provenance/official.py A6.4), so a single seed must be picked explicitly to load ONE
+# of the three. Seed 42 is used here as a REPRESENTATIVE probe only; the three official
+# forecasters differ (different training draws), so this result is not a statement about all
+# three. (Unrelated to the `torch.manual_seed(42)` below, which seeds the bootstrap retrain itself.)
+PROBE_TRAIN_SEED = 42
 
 
 def _files(*scn_nums: str) -> list[Path]:
@@ -74,12 +81,13 @@ def main() -> None:
           f"test(DQN-06)={len(test_ds)}")
 
     # --- 1. distribution-shift probe: official forecaster on DQN states ---
-    official = load_forecaster(str(_OFFICIAL))
+    official = load_forecaster(str(official_lstm_checked(PROBE_TRAIN_SEED)))
     ss_off_test = _skill(official, test_ds)
     ss_off_train = _skill(official, LSTMDataset(train_dqn))
-    print("\n=== DISTRIBUTION-SHIFT PROBE (official Webster-trained forecaster on DQN states) ===")
-    print(f"  official skill on DQN-SCN-06 (held-out test): {_fmt(ss_off_test)}")
-    print(f"  official skill on DQN train states:           {_fmt(ss_off_train)}")
+    print(f"\n=== DISTRIBUTION-SHIFT PROBE (official Webster-trained forecaster, seed "
+          f"{PROBE_TRAIN_SEED} ONLY - representative, not the other two seeds - on DQN states) ===")
+    print(f"  official (seed {PROBE_TRAIN_SEED}) skill on DQN-SCN-06 (held-out test): {_fmt(ss_off_test)}")
+    print(f"  official (seed {PROBE_TRAIN_SEED}) skill on DQN train states:           {_fmt(ss_off_train)}")
     print("  (compare to its reported Webster skill: val 0.07/0.10/0.12, test 0.14/0.18/0.22)")
 
     # --- 2. bootstrap retrain on DQN(+Webster) states ---
