@@ -154,22 +154,24 @@ namespace SmartTraffic
         private void DrawMenu()
         {
             MenuBackdrop.Draw();
-            const float w = 420f, rowH = 44f, gap = 10f;
-            var h = 374f;   // one row taller since the dashboard entry joined the menu
+            // Every dimension here scales with the type in UITheme; the panel was sized around
+            // 13 pt text and clipped its own buttons the moment the fonts grew.
+            const float w = 560f, rowH = 58f, gap = 12f;
+            var h = 486f;
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
                 (UnityEngine.Screen.height - h) / 2f, w, h);
 
             GUI.Box(box, GUIContent.none, UITheme.Panel);
-            var y = box.y + 22f;
+            var y = box.y + 26f;
 
-            GUI.Label(new Rect(box.x, y, w, 40f), "Smart Traffic Intersection", UITheme.Title);
-            y += 44f;
-            GUI.Label(new Rect(box.x, y, w, 22f), "DQN vs Webster - live SUMO viewer",
+            GUI.Label(new Rect(box.x, y, w, 52f), "Smart Traffic Intersection", UITheme.Title);
+            y += 58f;
+            GUI.Label(new Rect(box.x, y, w, 26f), "DQN vs Webster - live SUMO viewer",
                 Centered(UITheme.Hint));
-            y += 38f;
+            y += 44f;
 
-            var bx = box.x + 30f;
-            var bw = w - 60f;
+            var bx = box.x + 36f;
+            var bw = w - 72f;
 
             if (GUI.Button(new Rect(bx, y, bw, rowH), "Live visualization", UITheme.Button))
             {
@@ -200,15 +202,16 @@ namespace SmartTraffic
 
         private void DrawDashboard()
         {
+            MenuBackdrop.Draw();
             _dash?.Draw();
             // Sized to match the live bar's buttons - the two screens are toggled back and forth
             // during a demo and controls that change size between them read as a different app.
-            var y = UnityEngine.Screen.height - 48f;
-            if (GUI.Button(new Rect(20f, y, 150f, 34f), "Back  Esc", UITheme.Button))
+            var y = UnityEngine.Screen.height - 62f;
+            if (GUI.Button(new Rect(24f, y, 170f, 44f), "Back", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
-            if (GUI.Button(new Rect(178f, y, 168f, 34f), "3-D view  D", UITheme.Button))
+            if (GUI.Button(new Rect(204f, y, 190f, 44f), "3-D view", UITheme.Button))
             {
                 Go(Screen.Live);
             }
@@ -226,7 +229,7 @@ namespace SmartTraffic
 
             if (RunSetupUI.Draw(box, ref _cfg, _session, showStop: true)) RunAndWatch();
 
-            if (GUI.Button(new Rect(box.x, box.yMax + 8f, 130f, 30f), "Back  Esc", UITheme.Button))
+            if (GUI.Button(new Rect(box.x, box.yMax + 8f, 130f, 30f), "Back", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
@@ -250,40 +253,51 @@ namespace SmartTraffic
         }
 
         /// <summary>Height of the live-view top bar. TrafficViz lays its HUD out below this.</summary>
-        public const float TopBarHeight = 46f;
+        public const float TopBarHeight = 62f;
 
         /// <summary>The thin bar shown while the live view is up.</summary>
         private void DrawLiveBar()
         {
             var w = UnityEngine.Screen.width;
             UITheme.Backdrop(new Rect(0f, 0f, w, TopBarHeight));
-            GUI.Label(new Rect(16f, 12f, 460f, 22f),
+            GUI.Label(new Rect(20f, 20f, 620f, 26f),
                 "SMART TRAFFIC   -   " + _cfg.Scenario + "  /  " + _cfg.Controller, UITheme.Heading);
 
             // The 3-D view had no way out to the numbers except the D key, which nobody discovers
-            // during a demo. Three buttons, laid out from the right edge so they cannot overlap
-            // the title on a narrow window.
-            const float bh = 34f, by = 6f, gap = 8f;
-            var x = w - 12f;
+            // during a demo. Buttons laid out from the right edge so they cannot overlap the
+            // title on a narrow window.
+            //
+            // Labels carry no key hints. "Dashboard  D" was read as a typo rather than as a
+            // shortcut, which is a fair reading - a shortcut nobody asked about is noise on the
+            // button. The keys still work; they are listed on the About screen instead.
+            const float bh = 44f, by = 8f, gap = 10f;
+            var x = w - 16f;
 
-            x -= 118f;
-            if (GUI.Button(new Rect(x, by, 118f, bh), "Menu  Esc", UITheme.Button))
+            x -= 140f;
+            if (GUI.Button(new Rect(x, by, 140f, bh), "Menu", UITheme.Button))
             {
                 Go(Screen.Menu);
             }
 
-            x -= 150f + gap;
-            if (GUI.Button(new Rect(x, by, 150f, bh), "Dashboard  D", UITheme.Button))
+            x -= 170f + gap;
+            if (GUI.Button(new Rect(x, by, 170f, bh), "Dashboard", UITheme.Button))
             {
                 Go(Screen.Dashboard);
             }
 
-            x -= 168f + gap;
-            if (GUI.Button(new Rect(x, by, 168f, bh),
-                    _overlay ? "Close  Tab" : "Change scene  Tab",
+            x -= 200f + gap;
+            if (GUI.Button(new Rect(x, by, 200f, bh),
+                    _overlay ? "Close" : "Change scene",
                     _overlay ? UITheme.ButtonOn : UITheme.Button))
             {
                 _overlay = !_overlay;
+            }
+
+            x -= 150f + gap;
+            if (GUI.Button(new Rect(x, by, 150f, bh),
+                    DayNight.IsNight ? "Day" : "Night", UITheme.Button))
+            {
+                DayNight.Toggle();
             }
 
             if (!_overlay) return;
@@ -307,7 +321,7 @@ namespace SmartTraffic
 
         private void BackButton(Rect box)
         {
-            if (GUI.Button(new Rect(box.x + 24f, box.yMax - 48f, 130f, 32f), "Back  Esc", UITheme.Button))
+            if (GUI.Button(new Rect(box.x + 24f, box.yMax - 48f, 130f, 32f), "Back", UITheme.Button))
             {
                 Go(Screen.Menu);
             }

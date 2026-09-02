@@ -61,7 +61,7 @@ namespace SmartTraffic
         private float _interval;        // measured seconds between the last two frames
         private SimFrame _latest;
         private Material[] _paints;
-        private Material _glass, _tyre, _trim, _headlight, _tail;
+        private Material _glass, _tyre, _trim, _headlight, _tail, _taxiPaint, _taxiSign;
         private int _spawned;
         private GameObject _sceneRoot;
         private CameraRig _rig;
@@ -100,6 +100,10 @@ namespace SmartTraffic
                 // of a car is which is exactly what the viewer is trying to read.
                 _headlight = Emissive(shader, new Color(1.00f, 0.96f, 0.82f), 1.6f);
                 _tail = Emissive(shader, new Color(0.85f, 0.12f, 0.10f), 1.9f);
+                _taxiPaint = new Material(shader) { color = new Color(0.96f, 0.76f, 0.09f) };
+                // Lit, so the roof sign still reads at night - which is when a taxi is easiest
+                // to pick out of traffic and hardest to see by paint alone.
+                _taxiSign = Emissive(shader, new Color(0.98f, 0.94f, 0.80f), 1.1f);
             }
 
             EnsureCamera();
@@ -258,30 +262,79 @@ namespace SmartTraffic
             var car = new GameObject("Vehicle");
             car.transform.SetParent(_carRoot);
 
-            var paint = _paints[_spawned++ % _paints.Length];
             var t = car.transform;
+            // Body styles cycle rather than being drawn at random, so a queue is always visibly
+            // mixed instead of occasionally coming out as six identical saloons.
+            var style = _spawned % 4;
+            var paint = style == 1 ? _taxiPaint : _paints[_spawned % _paints.Length];
+            _spawned++;
 
             // +z is forward (see the yaw applied in Apply), so the cabin sits behind centre and
             // the windscreen faces +z.
-            AddPart(t, "Body", new Vector3(1.8f, 0.62f, 4.3f), new Vector3(0f, 0.05f, 0f), paint);
-            AddPart(t, "Skirt", new Vector3(1.66f, 0.30f, 4.0f), new Vector3(0f, -0.26f, 0f), _trim);
-            AddPart(t, "Cabin", new Vector3(1.58f, 0.62f, 2.1f), new Vector3(0f, 0.62f, -0.30f), paint);
-            AddPart(t, "Windscreen", new Vector3(1.50f, 0.50f, 0.14f), new Vector3(0f, 0.62f, 0.74f), _glass);
-            AddPart(t, "Rear glass", new Vector3(1.50f, 0.44f, 0.14f), new Vector3(0f, 0.62f, -1.34f), _glass);
-            AddPart(t, "Side glass L", new Vector3(0.10f, 0.44f, 1.7f), new Vector3(-0.79f, 0.64f, -0.30f), _glass);
-            AddPart(t, "Side glass R", new Vector3(0.10f, 0.44f, 1.7f), new Vector3(0.79f, 0.64f, -0.30f), _glass);
+            //
+            // Four silhouettes off one parameterised shell: saloon, taxi, 4x4 and hatchback. All
+            // the same road vehicle class - no buses or trucks, which SUMO is not routing here and
+            // which would misrepresent the demand the agent is actually controlling.
+            float bodyH, cabinH, cabinZ, cabinLen, ride, wheelR, len;
+            switch (style)
+            {
+                case 1:  // taxi - saloon shell, longer cabin, and a roof sign
+                    bodyH = 0.62f; cabinH = 0.64f; cabinZ = -0.24f; cabinLen = 2.3f;
+                    ride = 0.05f; wheelR = 0.62f; len = 4.3f; break;
+                case 2:  // 4x4 - taller body, taller glasshouse, bigger wheels, more ground clearance
+                    bodyH = 0.86f; cabinH = 0.80f; cabinZ = -0.10f; cabinLen = 2.5f;
+                    ride = 0.24f; wheelR = 0.76f; len = 4.5f; break;
+                case 3:  // hatchback - short, stubby, cabin pushed back
+                    bodyH = 0.60f; cabinH = 0.66f; cabinZ = -0.44f; cabinLen = 1.9f;
+                    ride = 0.02f; wheelR = 0.58f; len = 3.7f; break;
+                default: // saloon
+                    bodyH = 0.62f; cabinH = 0.62f; cabinZ = -0.30f; cabinLen = 2.1f;
+                    ride = 0.05f; wheelR = 0.62f; len = 4.3f; break;
+            }
+
+            var half = len / 2f;
+            var cabinY = ride + bodyH / 2f + cabinH / 2f - 0.01f;
+
+            AddPart(t, "Body", new Vector3(1.8f, bodyH, len), new Vector3(0f, ride, 0f), paint);
+            AddPart(t, "Skirt", new Vector3(1.66f, 0.30f, len - 0.3f), new Vector3(0f, ride - 0.31f, 0f), _trim);
+            AddPart(t, "Cabin", new Vector3(1.58f, cabinH, cabinLen), new Vector3(0f, cabinY, cabinZ), paint);
+
+            var glassH = cabinH * 0.78f;
+            AddPart(t, "Windscreen", new Vector3(1.50f, glassH, 0.14f),
+                new Vector3(0f, cabinY, cabinZ + cabinLen / 2f), _glass);
+            AddPart(t, "Rear glass", new Vector3(1.50f, glassH * 0.9f, 0.14f),
+                new Vector3(0f, cabinY, cabinZ - cabinLen / 2f), _glass);
+            AddPart(t, "Side glass L", new Vector3(0.10f, glassH, cabinLen - 0.4f),
+                new Vector3(-0.79f, cabinY, cabinZ), _glass);
+            AddPart(t, "Side glass R", new Vector3(0.10f, glassH, cabinLen - 0.4f),
+                new Vector3(0.79f, cabinY, cabinZ), _glass);
 
             // Lamps: warm at the front, red at the back. Two small faces are enough to tell which
             // way a car is pointing from the overhead camera, which the plain boxes could not.
-            AddPart(t, "Headlight L", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(-0.62f, 0.10f, 2.16f), _headlight);
-            AddPart(t, "Headlight R", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(0.62f, 0.10f, 2.16f), _headlight);
-            AddPart(t, "Tail L", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(-0.63f, 0.14f, -2.16f), _tail);
-            AddPart(t, "Tail R", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(0.63f, 0.14f, -2.16f), _tail);
+            AddPart(t, "Headlight L", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(-0.62f, ride + 0.05f, half), _headlight);
+            AddPart(t, "Headlight R", new Vector3(0.42f, 0.20f, 0.10f), new Vector3(0.62f, ride + 0.05f, half), _headlight);
+            AddPart(t, "Tail L", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(-0.63f, ride + 0.09f, -half), _tail);
+            AddPart(t, "Tail R", new Vector3(0.40f, 0.18f, 0.10f), new Vector3(0.63f, ride + 0.09f, -half), _tail);
 
-            AddWheel(t, "Wheel FL", new Vector3(-0.86f, -0.30f, 1.32f));
-            AddWheel(t, "Wheel FR", new Vector3(0.86f, -0.30f, 1.32f));
-            AddWheel(t, "Wheel RL", new Vector3(-0.86f, -0.30f, -1.32f));
-            AddWheel(t, "Wheel RR", new Vector3(0.86f, -0.30f, -1.32f));
+            if (style == 1)
+            {
+                // The roof sign is what actually makes a taxi readable from above - the paint
+                // colour alone is just another yellow car.
+                AddPart(t, "Taxi sign", new Vector3(0.75f, 0.24f, 0.30f),
+                    new Vector3(0f, cabinY + cabinH / 2f + 0.12f, cabinZ + 0.2f), _taxiSign);
+            }
+            if (style == 2)
+            {
+                AddPart(t, "Roof rack", new Vector3(1.30f, 0.10f, cabinLen - 0.5f),
+                    new Vector3(0f, cabinY + cabinH / 2f + 0.06f, cabinZ), _trim);
+            }
+
+            var axle = half - wheelR - 0.28f;
+            var wheelY = ride - bodyH / 2f + wheelR * 0.35f;
+            AddWheel(t, "Wheel FL", new Vector3(-0.86f, wheelY, axle), wheelR);
+            AddWheel(t, "Wheel FR", new Vector3(0.86f, wheelY, axle), wheelR);
+            AddWheel(t, "Wheel RL", new Vector3(-0.86f, wheelY, -axle), wheelR);
+            AddWheel(t, "Wheel RR", new Vector3(0.86f, wheelY, -axle), wheelR);
             return car;
         }
 
@@ -305,13 +358,13 @@ namespace SmartTraffic
         }
 
         /// <summary>A cylinder laid on its side, so its round face points out across the car.</summary>
-        private void AddWheel(Transform parent, string name, Vector3 offset)
+        private void AddWheel(Transform parent, string name, Vector3 offset, float radius)
         {
             var wheel = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             wheel.name = name;
             wheel.transform.SetParent(parent);
             // Unity's cylinder is 2 units tall along +y, so y-scale is the HALF width.
-            wheel.transform.localScale = new Vector3(0.62f, 0.12f, 0.62f);
+            wheel.transform.localScale = new Vector3(radius, 0.12f, radius);
             wheel.transform.localPosition = offset;
             wheel.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
             Destroy(wheel.GetComponent<CapsuleCollider>());
@@ -351,16 +404,22 @@ namespace SmartTraffic
             // Flat ambient on top of the key light: without it the unlit faces of the cars and
             // signal housings go almost black at this camera angle and the scene reads as mush.
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.42f, 0.45f, 0.50f);
 
             // FindFirstObjectByType, not the FindObjectOfType overload it replaced - the latter is
             // obsolete from Unity 2023 on and warns under Unity 6.
-            if (FindFirstObjectByType<Light>() != null) return;
+            var existing = FindFirstObjectByType<Light>();
+            if (existing != null)
+            {
+                // Still hand it over: the sun's colour, angle and the ambient level are all owned
+                // by DayNight, and a scene rebuilt while night is on must come back at night.
+                DayNight.RegisterSun(existing);
+                return;
+            }
+
             var go = new GameObject("Directional Light");
             var light = go.AddComponent<Light>();
             light.type = LightType.Directional;
-            light.intensity = 1.25f;
-            go.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            DayNight.RegisterSun(light);
         }
 
         private void OnGUI()

@@ -113,6 +113,9 @@ namespace SmartTraffic
         /// <summary>Builds ground, roads, markings and signal masts. Returns the root object.</summary>
         public static GameObject BuildStatic()
         {
+            // The previous scene's lights are gone; forget them before anything registers new
+            // ones, or the night switch would be driving destroyed objects.
+            DayNight.Reset();
             var root = new GameObject("Intersection");
 
             var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
@@ -132,7 +135,70 @@ namespace SmartTraffic
             Slab(root, "Arm_W", new Vector3(armLen, 0.1f, RoadWidth), new Vector3(-armMid, 0f, 0f), Asphalt);
 
             BuildMarkings(root);
+            BuildStreetLamps(root);
             return root;
+        }
+
+        /// <summary>
+        /// Lamp columns down both verges of every arm.
+        ///
+        /// They are the reason the night mode is worth having: a scene lit only by a dim moon is
+        /// just a darker picture, whereas pools of warm light along the carriageway give the road
+        /// a shape after dark and make the signal aspects the brightest thing in frame - which is
+        /// exactly where the eye should be during this demo.
+        ///
+        /// Their point lights are switched by <see cref="DayNight"/> and are OFF by day; a scene
+        /// that leaves a dozen real-time lights burning in daylight pays for them and shows
+        /// nothing for it.
+        /// </summary>
+        private static void BuildStreetLamps(GameObject root)
+        {
+            var lamps = new GameObject("StreetLamps").transform;
+            lamps.SetParent(root.transform);
+
+            const float mastH = 9.5f;
+            const float reach = 3.2f;      // how far the arm leans out over the carriageway
+
+            for (var approach = 0; approach < 4; approach++)
+            {
+                var axis = AxisOf(approach);
+                var side = new Vector3(-axis.z, 0f, axis.x);
+
+                // Staggered down the arm, kept clear of the stop line so they never sit on top of
+                // a signal head.
+                for (var i = 0; i < 3; i++)
+                {
+                    var along = 46f + i * 38f;
+                    foreach (var kerb in new[] { 1f, -1f })
+                    {
+                        var at = axis * along + side * (kerb * (HalfRoad + 2.2f));
+                        var inward = -side * kerb;   // from the kerb towards the centreline
+
+                        Post(lamps, "LampMast", at, 0.22f, mastH, Metal);
+                        Slab(root, "LampArm",
+                            Box(side, reach, 0.22f, 0.22f),
+                            at + inward * (reach / 2f) + Vector3.up * mastH, Metal)
+                            .transform.SetParent(lamps);
+
+                        var headAt = at + inward * reach + Vector3.up * (mastH - 0.25f);
+                        var lens = Slab(root, "LampLens",
+                            new Vector3(1.5f, 0.32f, 1.5f), headAt,
+                            new Color(0.55f, 0.55f, 0.52f));
+                        lens.transform.SetParent(lamps);
+
+                        var lightGo = new GameObject("LampLight");
+                        lightGo.transform.SetParent(lamps);
+                        lightGo.transform.position = headAt - Vector3.up * 0.3f;
+                        var light = lightGo.AddComponent<Light>();
+                        light.type = LightType.Point;
+                        light.range = 34f;
+                        light.intensity = 2.1f;
+                        light.color = new Color(1.00f, 0.87f, 0.66f);
+
+                        DayNight.RegisterLamp(light, lens.GetComponent<Renderer>());
+                    }
+                }
+            }
         }
 
         /// <summary>Centre lines, lane dashes and stop bars - the cues that make flow readable.</summary>

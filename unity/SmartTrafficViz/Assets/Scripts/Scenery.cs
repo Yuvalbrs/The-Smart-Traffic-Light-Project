@@ -46,26 +46,40 @@ namespace SmartTraffic
                 // but the Mesh it points to does not.
                 if (_cone != null) return _cone;
                 const int sides = 7; // odd count keeps the silhouette from looking machined
-                var verts = new Vector3[sides + 2];
-                verts[0] = new Vector3(0f, 1f, 0f);       // apex
-                verts[sides + 1] = Vector3.zero;          // base centre
-                for (var i = 0; i < sides; i++)
+
+                // Split vertices, for the same reason the mountains use them: shared corners plus
+                // RecalculateNormals averages the normals and shades the cone smoothly, so a
+                // seven-sided fir came out looking like a smooth green blob instead of showing
+                // its seven faces.
+                var apex = new Vector3(0f, 1f, 0f);
+                var centre = Vector3.zero;
+                var verts = new System.Collections.Generic.List<Vector3>(sides * 6);
+                var tris = new System.Collections.Generic.List<int>(sides * 6);
+
+                void Tri(Vector3 a, Vector3 b, Vector3 c)
+                {
+                    tris.Add(verts.Count); verts.Add(a);
+                    tris.Add(verts.Count); verts.Add(b);
+                    tris.Add(verts.Count); verts.Add(c);
+                }
+
+                Vector3 Rim(int i)
                 {
                     var a = i / (float)sides * Mathf.PI * 2f;
-                    verts[i + 1] = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                    return new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
                 }
 
-                var tris = new int[sides * 6];
-                var t = 0;
                 for (var i = 0; i < sides; i++)
                 {
-                    var cur = i + 1;
-                    var next = i + 2 > sides ? 1 : i + 2;
-                    tris[t++] = 0; tris[t++] = next; tris[t++] = cur;                 // side
-                    tris[t++] = sides + 1; tris[t++] = cur; tris[t++] = next;         // base
+                    var cur = Rim(i);
+                    var next = Rim((i + 1) % sides);
+                    Tri(apex, next, cur);        // side
+                    Tri(centre, cur, next);      // base
                 }
 
-                _cone = new Mesh { name = "LowPolyCone", vertices = verts, triangles = tris };
+                _cone = new Mesh { name = "LowPolyCone" };
+                _cone.SetVertices(verts);
+                _cone.SetTriangles(tris, 0);
                 _cone.RecalculateNormals();
                 _cone.RecalculateBounds();
                 return _cone;
@@ -103,8 +117,6 @@ namespace SmartTraffic
                 var colour = Foliage[rng.Next(Foliage.Length)];
                 var at = new Vector3(x, 0f, z);
 
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.35f), radius, height * 0.75f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.70f), radius * 0.72f, height * 0.55f, colour);
                 var trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
                 trunk.name = "Trunk";
                 trunk.transform.SetParent(trees);
@@ -112,6 +124,32 @@ namespace SmartTraffic
                 trunk.transform.position = at + Vector3.up * (height * 0.2f);
                 Object.Destroy(trunk.GetComponent<Collider>());
                 IntersectionScene.Paint(trunk, TrunkColor);
+
+                // A third of them are broadleaf. A verge of nothing but identical firs reads as
+                // wallpaper; mixing two crown shapes is the cheapest way to break that up, and
+                // roadside planting is mixed in any case.
+                if (rng.NextDouble() < 0.34)
+                {
+                    var crowns = 2 + rng.Next(2);
+                    for (var c = 0; c < crowns; c++)
+                    {
+                        var blob = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                        blob.name = "Crown";
+                        blob.transform.SetParent(trees);
+                        var s = radius * (1.5f + (float)rng.NextDouble() * 0.7f);
+                        blob.transform.localScale = new Vector3(s, s * 0.85f, s);
+                        blob.transform.position = at + Vector3.up * (height * 0.55f)
+                            + new Vector3((float)(rng.NextDouble() - 0.5) * radius * 1.3f,
+                                (float)rng.NextDouble() * height * 0.22f,
+                                (float)(rng.NextDouble() - 0.5) * radius * 1.3f);
+                        Object.Destroy(blob.GetComponent<Collider>());
+                        IntersectionScene.Paint(blob, colour);
+                    }
+                    continue;
+                }
+
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.35f), radius, height * 0.75f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (height * 0.70f), radius * 0.72f, height * 0.55f, colour);
             }
         }
 
@@ -157,27 +195,38 @@ namespace SmartTraffic
                 var dist = minDist + (float)rng.NextDouble() * spread;
                 var at = new Vector3(Mathf.Cos(angle) * dist, -10f, Mathf.Sin(angle) * dist);
 
-                var height = minHeight + (float)rng.NextDouble() * heightSpread;
-                var radius = height * (0.75f + (float)rng.NextDouble() * 0.45f);
-                var yaw = (float)rng.NextDouble() * 360f;
-
-                // One ridge profile drives both meshes, so the snow cannot drift off the rock.
-                const int sides = 14;
-                var ridge = new float[sides];
-                for (var s = 0; s < sides; s++) ridge[s] = 0.72f + (float)rng.NextDouble() * 0.56f;
-
-                Place(hills, "Mountain", at, yaw, radius, height,
-                    RidgeMesh(ridge, sides, 0f, 1f, 1f, rng),
-                    HillColor[rng.Next(HillColor.Length)]);
-
-                if (rng.NextDouble() < snowChance)
+                // Each position gets a small CLUSTER rather than one peak. A range is overlapping
+                // massifs with subsidiary summits; one freestanding cone per slot is what made the
+                // horizon read as a row of hats no matter how the silhouette was shaped.
+                var peaks = 1 + rng.Next(3);
+                for (var k = 0; k < peaks; k++)
                 {
-                    var snowline = 0.58f + (float)rng.NextDouble() * 0.16f;
-                    Place(hills, "Snow", at, yaw, radius, height,
-                        // 1.5% outward keeps it clear of the rock it sits on; any less and the
-                        // two surfaces z-fight into a shimmering mess at this camera distance.
-                        RidgeMesh(ridge, sides, snowline, 1f, 1.015f, rng),
-                        SnowColor);
+                    var jitter = new Vector3(
+                        (float)(rng.NextDouble() - 0.5) * 130f, 0f,
+                        (float)(rng.NextDouble() - 0.5) * 130f);
+                    // Subsidiary peaks are lower, which is what makes the main one read as main.
+                    var drop = k == 0 ? 1f : 0.50f + (float)rng.NextDouble() * 0.28f;
+                    var height = (minHeight + (float)rng.NextDouble() * heightSpread) * drop;
+                    var radius = height * (0.80f + (float)rng.NextDouble() * 0.55f);
+                    var yaw = (float)rng.NextDouble() * 360f;
+
+                    // One ridge drives both meshes, so the snow cannot drift off the rock.
+                    const int sides = 26;
+                    var ridge = new Ridge(rng);
+
+                    Place(hills, "Mountain", at + jitter, yaw, radius, height,
+                        RidgeMesh(ridge, sides, 0f, 1f, 1f, rng),
+                        HillColor[rng.Next(HillColor.Length)]);
+
+                    if (rng.NextDouble() < snowChance * drop)
+                    {
+                        var snowline = 0.56f + (float)rng.NextDouble() * 0.18f;
+                        Place(hills, "Snow", at + jitter, yaw, radius, height,
+                            // 1.5% outward keeps it clear of the rock it sits on; any less and the
+                            // two surfaces z-fight into a shimmering mess at this camera distance.
+                            RidgeMesh(ridge, sides, snowline, 1f, 1.015f, rng),
+                            SnowColor);
+                    }
                 }
             }
         }
@@ -196,69 +245,105 @@ namespace SmartTraffic
         }
 
         /// <summary>
+        /// The silhouette of one mountain: a periodic sum of sines around the compass.
+        ///
+        /// Integer frequencies are what make it periodic - theta and theta+2pi must give the same
+        /// radius or the mesh splits open along the seam. Several octaves at falling amplitude is
+        /// the standard fBm recipe, and it is the difference between a lumpy cone and something
+        /// with a big shoulder, a couple of spurs off it, and fine broken detail on top. A single
+        /// octave - what the first version used - just makes a cone slightly oval.
+        /// </summary>
+        private sealed class Ridge
+        {
+            private readonly int[] _freq;
+            private readonly float[] _amp, _phase;
+
+            public Ridge(System.Random rng)
+            {
+                _freq = new[] { 2 + rng.Next(2), 5 + rng.Next(3), 11 + rng.Next(5), 19 + rng.Next(7) };
+                _amp = new[] { 0.30f, 0.16f, 0.075f, 0.035f };
+                _phase = new float[4];
+                for (var i = 0; i < 4; i++) _phase[i] = (float)(rng.NextDouble() * Mathf.PI * 2);
+            }
+
+            public float At(float theta)
+            {
+                var s = 0f;
+                for (var i = 0; i < _freq.Length; i++) s += _amp[i] * Mathf.Sin(_freq[i] * theta + _phase[i]);
+                return s;
+            }
+        }
+
+        /// <summary>
         /// A slice of one mountain: unit radius, unit height, apex at +y.
         ///
-        /// Stacked rings between <paramref name="vFrom"/> and <paramref name="vTo"/> (0 = base,
-        /// 1 = summit). Each ring's radius follows a concave profile, and each vertex is pushed
-        /// in or out by <paramref name="ridge"/>[direction] - one value per compass direction,
-        /// reused by every ring. That vertical coherence is the whole trick: noise that varies
-        /// per ring gives dents, noise held constant down the mountain gives spurs and gullies.
+        /// Rings between <paramref name="vFrom"/> and <paramref name="vTo"/> (0 = base, 1 =
+        /// summit) on a concave profile, displaced by the ridge function. The displacement is a
+        /// function of DIRECTION only, so it is identical on every ring - that vertical coherence
+        /// is what makes a spur read as a spur running down the mountain rather than as dents.
         ///
-        /// <paramref name="inflate"/> scales the whole slice outward, used to lift the snow cap
-        /// clear of the rock it shares a surface with.
+        /// Vertices are SPLIT: every triangle carries its own three, so each gets the face normal
+        /// and the surface shades as flat facets. Sharing vertices and calling RecalculateNormals
+        /// averages the normals at every corner, which is smooth shading - and a smooth-shaded
+        /// low-poly mountain looks like a melted blob, which is exactly how the first attempt
+        /// came out.
+        ///
+        /// <paramref name="inflate"/> scales the slice outward, to lift the snow clear of the
+        /// rock it shares a surface with.
         /// </summary>
-        private static Mesh RidgeMesh(float[] ridge, int sides, float vFrom, float vTo,
+        private static Mesh RidgeMesh(Ridge ridge, int sides, float vFrom, float vTo,
             float inflate, System.Random rng)
         {
-            const int rings = 7;
+            const int rings = 9;
 
-            var verts = new Vector3[rings * sides + 1];
-            var n = 0;
+            // Ring 0..rings-1 of positions, then the apex; triangles copy from this grid.
+            var grid = new Vector3[rings, sides];
             for (var r = 0; r < rings; r++)
             {
-                var v = Mathf.Lerp(vFrom, vTo, r / (float)rings);
-                // Concave profile: a wide skirt and steep shoulders, rather than a cone's
-                // dead-straight sides.
-                var ringR = Mathf.Pow(1f - v, 1.45f);
+                var v = Mathf.Lerp(vFrom, vTo, r / (float)(rings - 1));
+                // Concave profile - a wide skirt and steep shoulders, not a cone's straight sides.
+                var ringR = Mathf.Pow(1f - v, 1.42f);
                 for (var s = 0; s < sides; s++)
                 {
                     var a = s / (float)sides * Mathf.PI * 2f;
-                    // Ridges fade towards the summit, so the peak stays a peak.
-                    var amp = Mathf.Lerp(ridge[s], 1f, v * 0.65f);
-                    var rr = ringR * amp * inflate;
-                    var yj = v + (float)(rng.NextDouble() - 0.5) * 0.02f;
-                    verts[n++] = new Vector3(Mathf.Cos(a) * rr, yj, Mathf.Sin(a) * rr);
+                    // Relief flattens towards the summit so the peak stays a peak, and a little
+                    // vertical jitter stops the rings reading as contour lines.
+                    var relief = 1f + ridge.At(a) * Mathf.Lerp(1f, 0.25f, v);
+                    var rr = ringR * relief * inflate;
+                    var yj = v + (float)(rng.NextDouble() - 0.5) * 0.012f;
+                    grid[r, s] = new Vector3(Mathf.Cos(a) * rr, yj, Mathf.Sin(a) * rr);
                 }
             }
+            var apex = new Vector3(0f, vTo, 0f);
 
-            var apex = verts.Length - 1;
-            verts[apex] = new Vector3(0f, vTo, 0f);
+            var verts = new System.Collections.Generic.List<Vector3>((rings * sides) * 6);
+            var tris = new System.Collections.Generic.List<int>((rings * sides) * 6);
 
-            var tris = new System.Collections.Generic.List<int>((rings * sides + sides) * 6);
+            void Tri(Vector3 a, Vector3 b, Vector3 c)
+            {
+                tris.Add(verts.Count); verts.Add(a);
+                tris.Add(verts.Count); verts.Add(b);
+                tris.Add(verts.Count); verts.Add(c);
+            }
+
             for (var r = 0; r < rings - 1; r++)
             {
                 for (var s = 0; s < sides; s++)
                 {
-                    var a0 = r * sides + s;
-                    var a1 = r * sides + (s + 1) % sides;
-                    var b0 = (r + 1) * sides + s;
-                    var b1 = (r + 1) * sides + (s + 1) % sides;
-                    tris.Add(a0); tris.Add(b0); tris.Add(a1);
-                    tris.Add(a1); tris.Add(b0); tris.Add(b1);
+                    var s1 = (s + 1) % sides;
+                    Tri(grid[r, s], grid[r + 1, s], grid[r, s1]);
+                    Tri(grid[r, s1], grid[r + 1, s], grid[r + 1, s1]);
                 }
             }
-            var top = (rings - 1) * sides;
             for (var s = 0; s < sides; s++)
             {
-                tris.Add(top + s); tris.Add(apex); tris.Add(top + (s + 1) % sides);
+                Tri(grid[rings - 1, s], apex, grid[rings - 1, (s + 1) % sides]);
             }
 
             var mesh = new Mesh { name = "Ridge" };
-            mesh.vertices = verts;
-            mesh.triangles = tris.ToArray();
-            // Recalculated normals on a low ring count keep the faceted look the rest of the
-            // scene has, without authoring split vertices by hand.
-            mesh.RecalculateNormals();
+            mesh.SetVertices(verts);
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateNormals();   // per-triangle now, because nothing is shared
             mesh.RecalculateBounds();
             return mesh;
         }

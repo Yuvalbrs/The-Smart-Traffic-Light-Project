@@ -18,7 +18,7 @@ namespace SmartTraffic
         public static readonly Color Ink = new Color(0.92f, 0.94f, 0.97f);
         public static readonly Color Dim = new Color(0.62f, 0.66f, 0.72f);
 
-        private static GUIStyle _button, _buttonOn, _panel, _title, _label, _hint, _heading;
+        private static GUIStyle _button, _buttonOn, _panel, _title, _label, _hint, _heading, _tile;
         private static Texture2D _panelTex, _buttonTex, _hoverTex, _onTex;
 
         private static Texture2D Solid(Color c)
@@ -41,13 +41,13 @@ namespace SmartTraffic
 
             _button = new GUIStyle(GUI.skin.button)
             {
-                // 14/12,12 rather than 13/7,7: the live-view controls are read at a glance from
-                // across a room during a demo, and taller buttons with the old padding looked
-                // like text floating in a box.
-                fontSize = 14,
+                // 18 pt, up from the original 13. Every size in this file was set while reading
+                // the app on the machine that built it; on a projector at the back of a room the
+                // whole UI was too small to read, which is the only size test that counts.
+                fontSize = 18,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                padding = new RectOffset(12, 12, 8, 8),
+                padding = new RectOffset(16, 16, 11, 11),
                 border = new RectOffset(2, 2, 2, 2),
             };
             _button.normal.background = _buttonTex;
@@ -67,20 +67,25 @@ namespace SmartTraffic
 
             _title = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 30,
+                fontSize = 40,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
             };
             _title.normal.textColor = Color.white;
 
-            _heading = new GUIStyle(GUI.skin.label) { fontSize = 15, fontStyle = FontStyle.Bold };
+            _heading = new GUIStyle(GUI.skin.label) { fontSize = 20, fontStyle = FontStyle.Bold };
             _heading.normal.textColor = Accent;
 
-            _label = new GUIStyle(GUI.skin.label) { fontSize = 13 };
+            _label = new GUIStyle(GUI.skin.label) { fontSize = 17 };
             _label.normal.textColor = Ink;
 
-            _hint = new GUIStyle(GUI.skin.label) { fontSize = 12 };
+            _hint = new GUIStyle(GUI.skin.label) { fontSize = 15 };
             _hint.normal.textColor = Dim;
+
+            // The one number per KPI tile. It is the thing an audience actually reads off this
+            // screen, so it gets its own size rather than sharing the heading's.
+            _tile = new GUIStyle(GUI.skin.label) { fontSize = 34, fontStyle = FontStyle.Bold };
+            _tile.normal.textColor = Color.white;
         }
 
         private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn;
@@ -92,7 +97,7 @@ namespace SmartTraffic
 
             _cellId = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft,
+                fontSize = 17, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft,
             };
             _cellId.normal.textColor = Ink;
 
@@ -107,7 +112,7 @@ namespace SmartTraffic
 
             _cellBlurb = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12, alignment = TextAnchor.MiddleLeft,
+                fontSize = 15, alignment = TextAnchor.MiddleLeft,
             };
             _cellBlurb.normal.textColor = Dim;
 
@@ -127,6 +132,7 @@ namespace SmartTraffic
         public static GUIStyle Heading { get { Ensure(); return _heading; } }
         public static GUIStyle Label { get { Ensure(); return _label; } }
         public static GUIStyle Hint { get { Ensure(); return _hint; } }
+        public static GUIStyle Tile { get { Ensure(); return _tile; } }
 
         /// <summary>Fills a rect with the panel background - for bars behind controls.</summary>
         public static void Backdrop(Rect rect)
