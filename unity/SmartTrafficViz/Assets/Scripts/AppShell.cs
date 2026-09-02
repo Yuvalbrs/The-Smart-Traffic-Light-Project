@@ -210,7 +210,9 @@ namespace SmartTraffic
             // Every dimension here scales with the type in UITheme; the panel was sized around
             // 13 pt text and clipped its own buttons the moment the fonts grew.
             const float w = 560f, rowH = 58f, gap = 12f;
-            var h = 626f;   // two more entries: Train and Compare
+            // The hub URL used to sit under the last button; it moved to About, so the panel
+            // loses the row it occupied rather than keeping an empty strip at the bottom.
+            var h = 592f;
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
                 (UnityEngine.Screen.height - h) / 2f, w, h);
 
@@ -260,9 +262,6 @@ namespace SmartTraffic
             {
                 Go(Screen.About);
             }
-            y += rowH + gap + 6f;
-
-            GUI.Label(new Rect(bx, y, bw, 20f), "hub: " + HubUrl, Centered(UITheme.Hint));
         }
 
         private void DrawDashboard()
@@ -355,7 +354,8 @@ namespace SmartTraffic
             // Taller, and scrolled. At 560x300 with the larger type the last paragraph and the
             // whole keyboard list were simply unreachable - text that exists and cannot be read.
             var box = Sheet(820f, 560f, "About");
-            const string body =
+            // No longer const: it now interpolates HubUrl, which is a field, not a constant.
+            var body =
                 "Renders a live SUMO episode from the hub's ws/unity channel at 1 Hz, with " +
                 "client-side interpolation between frames.\n\n" +
                 "The intersection, signals and scenery are generated at runtime from " +
@@ -364,6 +364,8 @@ namespace SmartTraffic
                 "Each approach carries three signal heads because left, through and right are " +
                 "independently controlled - those twelve movements are the agent's action space." +
                 "\n\n" +
+                "This viewer is a CLIENT. The simulation runs in the hub, so with nothing " +
+                "serving " + HubUrl + " it draws the junction and reports \"connecting\".\n\n" +
                 "Keyboard\n" +
                 "  D      switch between the 3-D view and the dashboard\n" +
                 "  Tab    open the scene picker over the 3-D view\n" +
