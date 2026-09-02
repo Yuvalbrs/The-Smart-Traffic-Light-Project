@@ -59,7 +59,8 @@ namespace SmartTraffic
             var cell = Mathf.Min(112f, (w - 140f) / scenarios.Count);
             for (var i = 0; i < scenarios.Count; i++)
             {
-                if (GUI.Button(new Rect(x + 140f + i * (cell + 4f), y, cell, 40f), scenarios[i],
+                if (GUI.Button(new Rect(x + 140f + i * (cell + 4f), y, cell, UITheme.LineH(UITheme.Button)),
+                        scenarios[i],
                         i == _scenario ? UITheme.ButtonOn : UITheme.Button))
                 {
                     _scenario = i;

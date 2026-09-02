@@ -270,37 +270,42 @@ namespace SmartTraffic
                 var scenarios = Api.Scenarios.Count > 0 ? Api.Scenarios : new List<string> { Config.Scenario };
                 var controllers = Api.Controllers.Count > 0 ? Api.Controllers : new List<string> { Config.Controller };
 
+                // 34f cut the descenders off "dqn-hybrid", "sel/plain" and "max_pressure".
+                // The row pitch has to grow with the button or the rows collide.
+                var btnH = UITheme.LineH(UITheme.Button);
+                var rowGap = 8f;
+
                 GUI.Label(new Rect(x, y + 4f, 110f, 28f), "scene", UITheme.Hint);
                 var cell = Mathf.Min(104f, (w - 130f) / Mathf.Max(1, scenarios.Count));
                 for (var i = 0; i < scenarios.Count; i++)
                 {
-                    if (GUI.Button(new Rect(x + 120f + i * (cell + 4f), y, cell, 34f), scenarios[i],
+                    if (GUI.Button(new Rect(x + 120f + i * (cell + 4f), y, cell, btnH), scenarios[i],
                             scenarios[i] == Config.Scenario ? UITheme.ButtonOn : UITheme.Button))
                     {
                         Config.Scenario = scenarios[i];
                     }
                 }
-                y += 42f;
+                y += btnH + rowGap;
 
                 GUI.Label(new Rect(x, y + 4f, 110f, 28f), "controller", UITheme.Hint);
                 var ccell = Mathf.Min(170f, (w - 130f) / Mathf.Max(1, controllers.Count));
                 for (var i = 0; i < controllers.Count; i++)
                 {
-                    if (GUI.Button(new Rect(x + 120f + i * (ccell + 4f), y, ccell, 34f), controllers[i],
+                    if (GUI.Button(new Rect(x + 120f + i * (ccell + 4f), y, ccell, btnH), controllers[i],
                             controllers[i] == Config.Controller ? UITheme.ButtonOn : UITheme.Button))
                     {
                         Config.Controller = controllers[i];
                     }
                 }
-                y += 44f;
+                y += btnH + rowGap + 2f;
 
                 var live = Session.State == "running" || Session.State == "starting";
-                if (GUI.Button(new Rect(x, y, 200f, 40f), live ? "Restart run" : "Run this",
+                if (GUI.Button(new Rect(x, y, 200f, btnH), live ? "Restart run" : "Run this",
                         Session.Busy ? UITheme.ButtonOff : UITheme.Button) && !Session.Busy)
                 {
                     Session.Switch(Config);
                 }
-                if (GUI.Button(new Rect(x + 214f, y, 150f, 40f), "Stop",
+                if (GUI.Button(new Rect(x + 214f, y, 150f, btnH), "Stop",
                         live ? UITheme.Button : UITheme.ButtonOff) && live)
                 {
                     Session.Stop();
@@ -308,7 +313,7 @@ namespace SmartTraffic
                 GUI.Label(new Rect(x + 380f, y + 8f, w - 380f, 26f),
                     "hub says: " + Session.State + "   " + Session.RunningController + " / "
                     + Session.RunningScenario, UITheme.Hint);
-                y += 50f;
+                y += btnH + rowGap;
 
                 if (!string.IsNullOrEmpty(Session.LastError))
                 {
