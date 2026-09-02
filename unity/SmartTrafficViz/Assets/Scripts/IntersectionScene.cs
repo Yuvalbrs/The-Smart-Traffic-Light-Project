@@ -413,7 +413,13 @@ namespace SmartTraffic
                 var fit = SignRadius * 0.82f / corner;   // 0.82 leaves a visible blue margin
 
                 var combo = new GameObject("Arrow");
-                combo.transform.SetParent(sign);
+                // SetParent(sign, FALSE). The default overload keeps the object's WORLD transform
+                // and back-solves a local rotation to preserve it - so a glyph created with
+                // identity rotation stayed facing world +Z whatever way its sign pointed. On the
+                // north approach that happened to be correct; on east and west the sign was seen
+                // edge-on as a thin vertical sliver. AddArrow never hit this because it assigns
+                // localRotation straight afterwards, which overwrites the back-solved value.
+                combo.transform.SetParent(sign, false);
                 combo.transform.localPosition = new Vector3(ComboCentreX * fit, 0f, 0.30f);
                 combo.transform.localScale = Vector3.one * fit;
                 combo.AddComponent<MeshFilter>().sharedMesh = ComboArrowMesh;
