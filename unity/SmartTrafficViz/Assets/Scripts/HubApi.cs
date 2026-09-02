@@ -88,6 +88,10 @@ namespace SmartTraffic
         public List<CompareRow> CompareRows = new List<CompareRow>();
         public string CompareNote, CompareError;
         public JobStatus Training, Evaluation;
+
+        /// <summary>Scenario of the most recent evaluation, so Compare can open on it.
+        /// A result you have to go hunting for may as well not have been produced.</summary>
+        public string LastEvaluatedScenario;
         public bool Busy { get; private set; }
 
         public HubApi(string wsUrl)
@@ -271,6 +275,7 @@ namespace SmartTraffic
             try
             {
                 var body = JsonConvert.SerializeObject(new { model_id = modelId, scenario, seeds });
+                LastEvaluatedScenario = scenario;
                 var resp = await Http.PostAsync(_base + "/evaluation",
                     new StringContent(body, Encoding.UTF8, "application/json"));
                 var text = await resp.Content.ReadAsStringAsync();

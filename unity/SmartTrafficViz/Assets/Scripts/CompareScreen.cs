@@ -43,10 +43,14 @@ namespace SmartTraffic
             var scenarios = _api.Scenarios.Count > 0
                 ? _api.Scenarios
                 : new List<string> { "SCN-01", "SCN-02", "SCN-03", "SCN-04", "SCN-05" };
-            // Default to the scenario the campaign headline is quoted on.
+            // Open on whatever was evaluated last, falling back to the scenario the campaign
+            // headline is quoted on. Evaluating a model and then landing on a different scenario
+            // makes a result that WAS produced look like one that was not.
             if (_loadedFor == null)
             {
-                var i = scenarios.IndexOf("SCN-05");
+                var want = _api.LastEvaluatedScenario ?? "SCN-05";
+                var i = scenarios.IndexOf(want);
+                if (i < 0) i = scenarios.IndexOf("SCN-05");
                 _scenario = i >= 0 ? i : 0;
             }
             _scenario = Mathf.Clamp(_scenario, 0, scenarios.Count - 1);

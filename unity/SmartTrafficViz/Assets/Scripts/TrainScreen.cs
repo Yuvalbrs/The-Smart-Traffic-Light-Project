@@ -31,6 +31,7 @@ namespace SmartTraffic
         private Vector2 _modelScroll;
         private string _evalFor;            // model id the evaluate row is open for
         private int _evalScenario;
+        private bool _evalScenarioPicked;
         private int _evalSeeds = 5;
         private float _nextPoll;
 
@@ -180,6 +181,15 @@ namespace SmartTraffic
             UITheme.Backdrop(panel);
 
             var scenarios = _api.Scenarios.Count > 0 ? _api.Scenarios : new List<string> { "SCN-05" };
+            // Default to the scenario the campaign headline is quoted on, not to whatever happens
+            // to be first in the list. Index 0 meant every evaluation landed on SCN-01 while the
+            // Compare screen opened on SCN-05, so the result looked like it had not been produced.
+            if (!_evalScenarioPicked)
+            {
+                var idx = scenarios.IndexOf("SCN-05");
+                _evalScenario = idx >= 0 ? idx : 0;
+                _evalScenarioPicked = true;
+            }
             _evalScenario = Mathf.Clamp(_evalScenario, 0, scenarios.Count - 1);
 
             var row = y + 14f;
@@ -221,7 +231,7 @@ namespace SmartTraffic
             {
                 GUI.Label(new Rect(x, row + 44f, w - 20f, 28f),
                     ev.Status == "done"
-                        ? "Done: " + ev.Detail + " - open Compare to see it beside the campaign."
+                        ? "Done: " + ev.Detail + ". Open Compare - it now opens on that scenario."
                         : ev.Detail + " - " + ev.Status + "  " + ev.Done + "/" + ev.Total,
                     ev.Status == "done" ? UITheme.Good : UITheme.Hint);
             }
