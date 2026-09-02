@@ -1,0 +1,41 @@
+# Keep the build context small and the image reproducible.
+#
+# The build context is uploaded to the daemon before anything runs, so an 83 MB Unity build and a
+# 500 MB .venv would be copied on every single `docker build` even though no stage uses them.
+
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node's install output — stage 1 runs its own `npm ci` inside the image, and a host node_modules
+# built on Windows would carry the wrong native binaries.
+frontend/node_modules/
+frontend/dist/
+
+# The Unity project and its 83 MB player: not runnable in a Linux container, and the single
+# largest thing in the repo.
+unity/
+
+# Runtime artefacts. These arrive through the compose bind mounts at run time; baking a stale copy
+# into the image would mean the container's idea of the data silently differed from the host's.
+data/
+runs/
+checkpoints/
+config/routes/
+
+.git/
+.github/
+*.log
+tripinfo*.xml
+*.jsonl
+
+# Docs and analysis notebooks — nothing the service imports.
+docs/
+analysis/
+*.md
+!README-docker.md

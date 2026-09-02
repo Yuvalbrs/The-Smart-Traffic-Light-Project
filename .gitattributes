@@ -1,0 +1,32 @@
+# Line endings.
+#
+# This repository is developed on Windows and its containers run Linux. A shell script checked out
+# with CRLF is not merely untidy - it is UNRUNNABLE: the kernel reads the shebang literally and
+# reports `env: 'bash\r': No such file or directory`, exit 127, with no other clue. That is exactly
+# how docker/entrypoint.sh broke once, and without this file a fresh clone on a Windows machine
+# would reintroduce it every time.
+#
+# Everything Linux executes or parses is forced to LF regardless of the platform it is checked out
+# on. `text=auto` leaves ordinary source files to git's normal handling.
+
+* text=auto
+
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.dockerignore   text eol=lf
+*.lock          text eol=lf
+
+# Windows-only entry points stay CRLF: cmd.exe is the thing that reads them.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# Binary — never touch, never diff.
+*.png           binary
+*.jpg           binary
+*.pt            binary
+*.db            binary
+*.zip           binary
+*.unitypackage  binary
