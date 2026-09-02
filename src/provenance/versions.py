@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import uuid
 from pathlib import Path
@@ -166,6 +167,15 @@ def git_sha(repo_root: str | Path = _REPO_ROOT, *, short: bool = False) -> str |
         out = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return out.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
+        # No git available. In a container that is the NORMAL case - the image ships source, not a
+        # repository - and returning None silently drops the provenance stamp from every run made
+        # inside it. That is worse than it looks: /comparison selects the newest git_sha for a
+        # mode, and NULL never matches in SQL, so a single unstamped run can make an entire mode
+        # read as "no episodes recorded". The image bakes the commit in at build time instead
+        # (Dockerfile: ARG GIT_SHA -> ENV SMART_TRAFFIC_GIT_SHA).
+        baked = os.environ.get("SMART_TRAFFIC_GIT_SHA", "").strip()
+        if baked:
+            return baked[:7] if short else baked
         return None
 
 
