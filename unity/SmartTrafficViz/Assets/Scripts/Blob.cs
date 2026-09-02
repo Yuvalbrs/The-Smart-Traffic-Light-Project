@@ -114,8 +114,13 @@ namespace SmartTraffic
                     var b = r * sectors + s1;
                     var c = (r + 1) * sectors + s;
                     var d = (r + 1) * sectors + s1;
-                    tris.Add(a); tris.Add(c); tris.Add(b);
-                    tris.Add(b); tris.Add(c); tris.Add(d);
+                    // Winding matters: the first version wound these the other way, so every
+                    // blob was built INSIDE-OUT. Unity culls back faces, so what you actually saw
+                    // was the far interior wall of the crown - and the trunk standing inside it,
+                    // apparently growing through the leaves. No amount of re-proportioning the
+                    // tree was ever going to fix that, because the surface was facing away.
+                    tris.Add(a); tris.Add(b); tris.Add(c);
+                    tris.Add(b); tris.Add(d); tris.Add(c);
                 }
             }
             mesh.vertices = verts;
@@ -139,8 +144,9 @@ namespace SmartTraffic
                 for (var s = 0; s < sectors; s++)
                 {
                     var s1 = (s + 1) % sectors;
-                    Tri(grid[r, s], grid[r + 1, s], grid[r, s1]);
-                    Tri(grid[r, s1], grid[r + 1, s], grid[r + 1, s1]);
+                    // Outward-facing, same correction as BuildShared above.
+                    Tri(grid[r, s], grid[r, s1], grid[r + 1, s]);
+                    Tri(grid[r, s1], grid[r + 1, s1], grid[r + 1, s]);
                 }
             }
             mesh.SetVertices(verts);

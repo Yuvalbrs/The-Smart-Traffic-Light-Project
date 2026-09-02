@@ -34,6 +34,11 @@ namespace SmartTraffic
         /// margin beyond the far end of every one of them.</summary>
         private const float Clearance = 300f;
 
+        /// <summary>How far out clouds must stay in plan, so none sits over the junction and
+        /// blocks the top-down camera. The top-down view sees roughly 120 m either side of
+        /// centre at its height, so this is comfortably outside the frame.</summary>
+        private const float CloudClearance = 360f;
+
         private static readonly Color SnowColor = new Color(0.92f, 0.94f, 0.97f);
         /// <summary>The daylight sky, which distant geometry fades toward.</summary>
         private static readonly Color HazeColor = new Color(0.58f, 0.68f, 0.80f);
@@ -130,37 +135,44 @@ namespace SmartTraffic
                 if (Mathf.Abs(x) < clear || Mathf.Abs(z) < clear) continue;
 
                 var height = 7f + (float)rng.NextDouble() * 10f;
-                var radius = height * (0.20f + (float)rng.NextDouble() * 0.09f);
                 var colour = Foliage[rng.Next(Foliage.Length)];
                 var at = new Vector3(x, 0f, z);
 
-                // The trunk stops INSIDE the crown, and the crown is guaranteed to cover the
-                // top of it. Before, the trunk topped out near the crown's underside and the
-                // crown's lobes were free to sit off to one side, so a bare stub showed through
-                // the leaves - a tree with a branch growing out of the middle of its foliage.
-                var crownY = height * 0.66f;
-                Taper(trees, at, radius * 0.26f, radius * 0.17f, crownY * 0.55f, 0f);
-                Taper(trees, at, radius * 0.17f, radius * 0.11f, crownY * 0.55f, crownY * 0.55f);
+                // Proportions are stated as fractions of the tree's HEIGHT, which is the fix.
+                // They used to be multiples of the trunk radius, so a slightly fat trunk produced
+                // a crown two-thirds as wide as the tree was tall, hanging down to a quarter of
+                // its height - a bush with a stick under it. A tree is mostly clear trunk with
+                // foliage in the top third.
+                var trunkR = height * 0.035f;              // ~0.4 m on a 12 m tree
+                var crownBottom = height * 0.42f;          // no green below here
+                var trunkTop = height * 0.70f;             // ends inside the crown, never below it
+
+                Taper(trees, at, trunkR * 1.35f, trunkR, trunkTop * 0.55f, 0f);
+                Taper(trees, at, trunkR, trunkR * 0.78f, trunkTop * 0.45f, trunkTop * 0.55f);
 
                 if (rng.NextDouble() < 0.45)
                 {
-                    var crownR = radius * (1.9f + (float)rng.NextDouble() * 0.7f);
+                    // Radius follows from where the crown has to start and stop, rather than
+                    // being picked and then hoping it lands well.
+                    var crownR = (height - crownBottom) * (0.62f + (float)rng.NextDouble() * 0.18f);
+                    var centreY = crownBottom + crownR;
+
                     var count = 4 + rng.Next(3);
                     var lobes = new Blob.Lobe[count];
-                    // Lobe 0 is centred, so the crown always encloses the trunk line whatever the
-                    // others do. The rest are kept within half a radius of it.
+                    // Lobe 0 sits on the trunk line so the crown always encloses it.
                     lobes[0] = new Blob.Lobe(Vector3.zero, crownR);
                     for (var l = 1; l < count; l++)
                     {
                         lobes[l] = new Blob.Lobe(
-                            new Vector3((float)(rng.NextDouble() - 0.5) * crownR * 0.55f,
-                                (float)(rng.NextDouble() - 0.5) * crownR * 0.45f,
-                                (float)(rng.NextDouble() - 0.5) * crownR * 0.55f),
-                            crownR * (0.62f + (float)rng.NextDouble() * 0.28f));
+                            new Vector3((float)(rng.NextDouble() - 0.5) * crownR * 0.75f,
+                                (float)(rng.NextDouble() - 0.5) * crownR * 0.5f,
+                                (float)(rng.NextDouble() - 0.5) * crownR * 0.75f),
+                            crownR * (0.60f + (float)rng.NextDouble() * 0.3f));
                     }
+
                     var crown = new GameObject("Crown");
                     crown.transform.SetParent(trees);
-                    crown.transform.position = at + Vector3.up * (crownY + crownR * 0.45f);
+                    crown.transform.position = at + Vector3.up * centreY;
                     crown.transform.rotation = Quaternion.Euler(0f, (float)rng.NextDouble() * 360f, 0f);
                     crown.AddComponent<MeshFilter>().sharedMesh = Blob.Build(
                         lobes, rings: 8, sectors: 12, flatBase: -999f, smooth: false,
@@ -170,11 +182,12 @@ namespace SmartTraffic
                     continue;
                 }
 
-                // Conifer in three tiers, each narrower, so the outline steps instead of being
-                // one long triangle.
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.26f), radius * 1.35f, height * 0.42f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.48f), radius * 1.05f, height * 0.38f, colour);
-                Cone(trees, "Fir", at + Vector3.up * (height * 0.70f), radius * 0.72f, height * 0.34f, colour);
+                // Conifer: three tiers in the top half, widest at the bottom. This shape was
+                // already right in the build - the broadleaf is now measured the same way.
+                var tierR = height * 0.20f;
+                Cone(trees, "Fir", at + Vector3.up * crownBottom, tierR * 1.30f, height * 0.26f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (crownBottom + height * 0.16f), tierR * 1.00f, height * 0.24f, colour);
+                Cone(trees, "Fir", at + Vector3.up * (crownBottom + height * 0.30f), tierR * 0.66f, height * 0.22f, colour);
             }
         }
 
@@ -455,12 +468,24 @@ namespace SmartTraffic
                 var mesh = Blob.Build(lobes, rings: 14, sectors: 22,
                     flatBase: -scale * 0.16f, smooth: true, jitter: 0.06f, rng: rng);
 
+                // Never directly over the network. The top-down preset sits at about 210 m and
+                // the clouds live at 120-190 m, so anything above the junction is BETWEEN the
+                // camera and the road - one cloud was covering a third of that view. Keeping the
+                // column clear is the fix; raising the layer above every camera would only make
+                // them invisible from the ground.
+                var cx = (float)(rng.NextDouble() * 2 - 1) * 620f;
+                var cz = (float)(rng.NextDouble() * 2 - 1) * 620f;
+                var flat = new Vector2(cx, cz);
+                if (flat.magnitude < CloudClearance)
+                {
+                    var dir = flat.sqrMagnitude > 0.01f ? flat.normalized : Vector2.up;
+                    cx = dir.x * CloudClearance;
+                    cz = dir.y * CloudClearance;
+                }
+
                 var go = new GameObject("Cloud");
                 go.transform.SetParent(clouds);
-                go.transform.position = new Vector3(
-                    (float)(rng.NextDouble() * 2 - 1) * 540f,
-                    120f + (float)rng.NextDouble() * 70f,
-                    (float)(rng.NextDouble() * 2 - 1) * 540f);
+                go.transform.position = new Vector3(cx, 120f + (float)rng.NextDouble() * 70f, cz);
                 go.transform.rotation = Quaternion.Euler(0f, drift * Mathf.Rad2Deg, 0f);
                 go.AddComponent<MeshFilter>().sharedMesh = mesh;
                 go.AddComponent<MeshRenderer>();
