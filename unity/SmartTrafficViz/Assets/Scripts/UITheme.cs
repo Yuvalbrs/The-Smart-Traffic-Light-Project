@@ -86,7 +86,35 @@ namespace SmartTraffic
             // screen, so it gets its own size rather than sharing the heading's.
             _tile = new GUIStyle(GUI.skin.label) { fontSize = 34, fontStyle = FontStyle.Bold };
             _tile.normal.textColor = Color.white;
+
+            // A disabled button must still look like a button, or the layout jumps as controls
+            // enable and disable during a training run.
+            _buttonOff = new GUIStyle(_button);
+            _buttonOff.normal.textColor = new Color(0.45f, 0.48f, 0.54f);
+            _buttonOff.hover.background = _buttonTex;
+            _buttonOff.hover.textColor = _buttonOff.normal.textColor;
+            _buttonOff.active.background = _buttonTex;
+
+            _field = new GUIStyle(GUI.skin.textField)
+            {
+                fontSize = 17, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(10, 10, 6, 6),
+            };
+            _field.normal.textColor = Ink;
+            _field.focused.textColor = Color.white;
+
+            _bad = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = true };
+            _bad.normal.textColor = new Color(1.00f, 0.45f, 0.40f);
+
+            _good = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold };
+            _good.normal.textColor = new Color(0.40f, 0.85f, 0.55f);
+
+            // The caveats under the comparison table are prose, and prose needs wrapping - an
+            // unwrapped label silently clips, which is how a caveat stops being read.
+            _wrap = new GUIStyle(GUI.skin.label) { fontSize = 15, wordWrap = true };
+            _wrap.normal.textColor = Dim;
         }
+
+        private static GUIStyle _buttonOff, _field, _bad, _good, _wrap;
 
         private static GUIStyle _cellId, _cellIdOn, _cellName, _cellNameOn, _cellBlurb, _cellBlurbOn;
 
@@ -133,6 +161,11 @@ namespace SmartTraffic
         public static GUIStyle Label { get { Ensure(); return _label; } }
         public static GUIStyle Hint { get { Ensure(); return _hint; } }
         public static GUIStyle Tile { get { Ensure(); return _tile; } }
+        public static GUIStyle ButtonOff { get { Ensure(); return _buttonOff; } }
+        public static GUIStyle Field { get { Ensure(); return _field; } }
+        public static GUIStyle Bad { get { Ensure(); return _bad; } }
+        public static GUIStyle Good { get { Ensure(); return _good; } }
+        public static GUIStyle Wrap { get { Ensure(); return _wrap; } }
 
         /// <summary>Fills a rect with the panel background - for bars behind controls.</summary>
         public static void Backdrop(Rect rect)

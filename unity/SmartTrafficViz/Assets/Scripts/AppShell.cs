@@ -15,7 +15,7 @@ namespace SmartTraffic
 {
     public class AppShell : MonoBehaviour
     {
-        public enum Screen { Menu, Live, Dashboard, Controls, About }
+        public enum Screen { Menu, Live, Dashboard, Train, Compare, Controls, About }
 
         public string HubUrl = "ws://127.0.0.1:8000/ws/unity";
 
@@ -23,6 +23,9 @@ namespace SmartTraffic
 
         private TrafficViz _viz;
         private DashboardScreen _dash;
+        private TrainScreen _train;
+        private CompareScreen _compare;
+        private HubApi _api;
         private Camera _menuCam;
         private SessionControl _session;
         private RunConfig _cfg = RunConfig.Default;
@@ -34,6 +37,10 @@ namespace SmartTraffic
             EnsureMenuCamera();
             _session = new SessionControl(HubUrl);
             _session.Refresh();
+            // One API client for every screen: the model list the Train screen shows and the
+            // scene list the dashboard offers must be the same lists, fetched once.
+            _api = new HubApi(HubUrl);
+            _api.RefreshControllers();
         }
 
         private void Update()
@@ -57,6 +64,7 @@ namespace SmartTraffic
             // Draining the feed is main-thread work and must happen every frame the screen is up,
             // not inside OnGUI - OnGUI runs several times per frame for layout and events.
             _dash?.Tick();
+            _train?.Tick();
 
             // D toggles straight between the picture and the numbers, so a demo can move between
             // them without going back out to the menu each time.
@@ -115,8 +123,11 @@ namespace SmartTraffic
 
             if (screen == Screen.Dashboard)
             {
-                _dash = new DashboardScreen(HubUrl);
+                _dash = new DashboardScreen(HubUrl) { Api = _api, Session = _session, Config = _cfg };
+                _api.RefreshRuns();
             }
+            if (screen == Screen.Train && _train == null) _train = new TrainScreen(_api);
+            if (screen == Screen.Compare) _compare = new CompareScreen(_api);
 
             if (screen == Screen.Live)
             {
@@ -147,6 +158,8 @@ namespace SmartTraffic
                 case Screen.Controls: DrawControls(); break;
                 case Screen.About: DrawAbout(); break;
                 case Screen.Dashboard: DrawDashboard(); break;
+                case Screen.Train: DrawTrain(); break;
+                case Screen.Compare: DrawCompare(); break;
                 case Screen.Live: DrawLiveBar(); break;
             }
         }
@@ -157,7 +170,7 @@ namespace SmartTraffic
             // Every dimension here scales with the type in UITheme; the panel was sized around
             // 13 pt text and clipped its own buttons the moment the fonts grew.
             const float w = 560f, rowH = 58f, gap = 12f;
-            var h = 486f;
+            var h = 626f;   // two more entries: Train and Compare
             var box = new Rect((UnityEngine.Screen.width - w) / 2f,
                 (UnityEngine.Screen.height - h) / 2f, w, h);
 
@@ -185,6 +198,18 @@ namespace SmartTraffic
             }
             y += rowH + gap;
 
+            if (GUI.Button(new Rect(bx, y, bw, rowH), "Train a controller", UITheme.Button))
+            {
+                Go(Screen.Train);
+            }
+            y += rowH + gap;
+
+            if (GUI.Button(new Rect(bx, y, bw, rowH), "Compare controllers", UITheme.Button))
+            {
+                Go(Screen.Compare);
+            }
+            y += rowH + gap;
+
             if (GUI.Button(new Rect(bx, y, bw, rowH), "Choose scene + controller", UITheme.Button))
             {
                 Go(Screen.Controls);
@@ -204,16 +229,60 @@ namespace SmartTraffic
         {
             MenuBackdrop.Draw();
             _dash?.Draw();
-            // Sized to match the live bar's buttons - the two screens are toggled back and forth
-            // during a demo and controls that change size between them read as a different app.
-            var y = UnityEngine.Screen.height - 62f;
-            if (GUI.Button(new Rect(24f, y, 170f, 44f), "Back", UITheme.Button))
+            NavBar();
+        }
+
+        private void DrawTrain()
+        {
+            MenuBackdrop.Draw();
+            _train?.Draw(ScreenBox());
+            NavBar();
+        }
+
+        private void DrawCompare()
+        {
+            MenuBackdrop.Draw();
+            _compare?.Draw(ScreenBox());
+            NavBar();
+        }
+
+        /// <summary>The area a full screen gets, leaving room for the nav bar underneath.</summary>
+        private static Rect ScreenBox()
+        {
+            const float pad = 28f;
+            var w = Mathf.Min(1560f, UnityEngine.Screen.width - pad * 2f);
+            return new Rect((UnityEngine.Screen.width - w) / 2f, pad, w,
+                UnityEngine.Screen.height - pad - 78f);
+        }
+
+        /// <summary>
+        /// Live / Dashboard / Train / Compare, on every screen that has them.
+        ///
+        /// The React app puts these four in one tab strip and never makes you go back to a menu
+        /// to change view; there is no reason this client should either, and during a demo the
+        /// trip out to a menu is exactly where the thread of an explanation gets dropped.
+        /// </summary>
+        private void NavBar()
+        {
+            var y = UnityEngine.Screen.height - 64f;
+            var labels = new[] { "3-D view", "Dashboard", "Train", "Compare" };
+            var screens = new[] { Screen.Live, Screen.Dashboard, Screen.Train, Screen.Compare };
+            const float bw = 190f, gap = 10f;
+            var total = labels.Length * bw + (labels.Length - 1) * gap + 180f;
+            var x = (UnityEngine.Screen.width - total) / 2f;
+
+            for (var i = 0; i < labels.Length; i++)
+            {
+                if (GUI.Button(new Rect(x + i * (bw + gap), y, bw, 46f), labels[i],
+                        Current == screens[i] ? UITheme.ButtonOn : UITheme.Button))
+                {
+                    Go(screens[i]);
+                }
+            }
+            if (GUI.Button(new Rect(x + labels.Length * (bw + gap), y, 170f, 46f), "Menu",
+                    UITheme.Button))
             {
                 Go(Screen.Menu);
-            }
-            if (GUI.Button(new Rect(204f, y, 190f, 44f), "3-D view", UITheme.Button))
-            {
-                Go(Screen.Live);
             }
         }
 

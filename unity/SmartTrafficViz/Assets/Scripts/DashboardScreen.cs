@@ -34,6 +34,15 @@ namespace SmartTraffic
         /// changing, which is indistinguishable from a dead feed unless we say so.</summary>
         public string SessionState = "unknown";
 
+        /// <summary>Set by AppShell so the dashboard can drive sessions and read the archive -
+        /// the React dashboard controls scenes from this screen, and so does this one now.</summary>
+        public HubApi Api;
+        public SessionControl Session;
+        public RunConfig Config = RunConfig.Default;
+
+        private Vector2 _scroll, _runScroll;
+        private bool _showReplay;
+
         public DashboardScreen(string wsUnityUrl)
         {
             // ws://host/ws/unity -> ws://host/ws/dashboard, so the two clients can never be
@@ -59,8 +68,9 @@ namespace SmartTraffic
             // Was capped at 980 px, which on a 2560-wide screen left the panel a narrow column
             // of tiny text in the middle. It now uses the window it is given.
             var w = Mathf.Min(1560f, UnityEngine.Screen.width - pad * 2f);
+            // Stops short of the bottom so the shared Live/Dashboard/Train/Compare bar has room.
             var box = new Rect((UnityEngine.Screen.width - w) / 2f, pad, w,
-                UnityEngine.Screen.height - pad * 2f);
+                UnityEngine.Screen.height - pad - 78f);
             GUI.Box(box, GUIContent.none, UITheme.Panel);
 
             var x = box.x + 20f;
@@ -84,22 +94,35 @@ namespace SmartTraffic
                 return;
             }
 
-            y = DrawKpiTiles(x, y, inner, _latest);
-            y = DrawPhase(x, y, inner, _latest);
-            y = DrawMovementBars(x, y, inner, "Queue per movement (vehicles)", _latest.QueueLengths);
-            y = DrawForecast(x, y, inner, _latest);
+            // Everything below scrolls: with the panels the React dashboard has - phase, queues,
+            // pressures, forecast, replay - the content is taller than any window it runs in.
+            var viewH = box.yMax - y - 104f;
+            var view = new Rect(x, y, inner, viewH);
+            var content = new Rect(0f, 0f, inner - 22f, ContentHeight(_latest));
+            _scroll = GUI.BeginScrollView(view, _scroll, content);
+
+            var cy = 0f;
+            var cw = content.width;
+            cy = DrawKpiTiles(0f, cy, cw, _latest);
+            cy = DrawPhase(0f, cy, cw, _latest);
+            cy = DrawMovementBars(0f, cy, cw, "Queue per movement (vehicles)", _latest.QueueLengths);
+            cy = DrawMovementBars(0f, cy, cw, "Pressure per movement", _latest.Pressures);
+            cy = DrawForecast(0f, cy, cw, _latest);
+            cy = DrawReplay(0f, cy, cw);
+            GUI.EndScrollView();
+            y = view.yMax + 6f;
 
             // Tiles keep their last values after an episode ends, which reads exactly like a dead
             // feed. Name the session state so a stopped dashboard is legible rather than alarming.
             var ended = SessionState == "finished" || SessionState == "stopped" || SessionState == "failed";
             if (ended)
             {
-                GUI.Label(new Rect(x, box.yMax - 96f, inner, 24f),
+                GUI.Label(new Rect(x, box.yMax - 62f, inner, 24f),
                     "Episode " + SessionState + " - values below are the final ones, not a stalled feed.",
                     UITheme.Hint);
             }
 
-            GUI.Label(new Rect(x, box.yMax - 70f, inner, 24f),
+            GUI.Label(new Rect(x, box.yMax - 34f, inner, 24f),
                 $"sim t={_latest.SimTime:0}s   frame #{_latest.Seq}   received={_feed.Received}   " +
                 $"dropped={_feed.Dropped}", UITheme.Hint);
         }
@@ -206,6 +229,136 @@ namespace SmartTraffic
                 "predicted queue 60 s ahead - the pre-registered ablation found this forecast "
                 + "significantly DEGRADES the agent; it is shown, not relied on.", UITheme.Hint);
             return DrawMovementBars(x, y + 26f, w, "", horizon);
+        }
+
+        /// <summary>How tall the scrolled content is. Kept in step with Draw's panel list.</summary>
+        private float ContentHeight(DashboardFrame f)
+        {
+            var movements = f.QueueLengths != null ? f.QueueLengths.Count : 12;
+            var pressures = f.Pressures != null ? f.Pressures.Count : 12;
+            var forecast = f.ForecastNext30s != null && f.ForecastNext30s.Count > 0 ? 12 : 0;
+            var bars = (movements + pressures + forecast) * 30f + 260f;
+            var replay = _showReplay ? 360f : 60f;
+            return 190f + bars + replay;
+        }
+
+        /// <summary>
+        /// The run archive, and the controls to start a new one.
+        ///
+        /// Both are here because they are here in the React dashboard, and for the same reason:
+        /// this is the screen someone stands in front of during a demo, so "run Webster on this
+        /// scene, now run the agent on the same seed" has to be possible without leaving it.
+        /// </summary>
+        private float DrawReplay(float x, float y, float w)
+        {
+            GUI.Label(new Rect(x, y, w, 28f), "Session + replay", UITheme.Heading);
+            y += 34f;
+
+            if (Session != null && Api != null)
+            {
+                var scenarios = Api.Scenarios.Count > 0 ? Api.Scenarios : new List<string> { Config.Scenario };
+                var controllers = Api.Controllers.Count > 0 ? Api.Controllers : new List<string> { Config.Controller };
+
+                GUI.Label(new Rect(x, y + 4f, 110f, 28f), "scene", UITheme.Hint);
+                var cell = Mathf.Min(104f, (w - 130f) / Mathf.Max(1, scenarios.Count));
+                for (var i = 0; i < scenarios.Count; i++)
+                {
+                    if (GUI.Button(new Rect(x + 120f + i * (cell + 4f), y, cell, 34f), scenarios[i],
+                            scenarios[i] == Config.Scenario ? UITheme.ButtonOn : UITheme.Button))
+                    {
+                        Config.Scenario = scenarios[i];
+                    }
+                }
+                y += 42f;
+
+                GUI.Label(new Rect(x, y + 4f, 110f, 28f), "controller", UITheme.Hint);
+                var ccell = Mathf.Min(170f, (w - 130f) / Mathf.Max(1, controllers.Count));
+                for (var i = 0; i < controllers.Count; i++)
+                {
+                    if (GUI.Button(new Rect(x + 120f + i * (ccell + 4f), y, ccell, 34f), controllers[i],
+                            controllers[i] == Config.Controller ? UITheme.ButtonOn : UITheme.Button))
+                    {
+                        Config.Controller = controllers[i];
+                    }
+                }
+                y += 44f;
+
+                var live = Session.State == "running" || Session.State == "starting";
+                if (GUI.Button(new Rect(x, y, 200f, 40f), live ? "Restart run" : "Run this",
+                        Session.Busy ? UITheme.ButtonOff : UITheme.Button) && !Session.Busy)
+                {
+                    Session.Switch(Config);
+                }
+                if (GUI.Button(new Rect(x + 214f, y, 150f, 40f), "Stop",
+                        live ? UITheme.Button : UITheme.ButtonOff) && live)
+                {
+                    Session.Stop();
+                }
+                GUI.Label(new Rect(x + 380f, y + 8f, w - 380f, 26f),
+                    "hub says: " + Session.State + "   " + Session.RunningController + " / "
+                    + Session.RunningScenario, UITheme.Hint);
+                y += 50f;
+
+                if (!string.IsNullOrEmpty(Session.LastError))
+                {
+                    GUI.Label(new Rect(x, y, w, 26f), Session.LastError, UITheme.Bad);
+                    y += 30f;
+                }
+            }
+
+            if (GUI.Button(new Rect(x, y, 260f, 38f),
+                    _showReplay ? "Hide recorded runs" : "Show recorded runs", UITheme.Button))
+            {
+                _showReplay = !_showReplay;
+                if (_showReplay) Api?.RefreshRuns();
+            }
+            y += 46f;
+            if (!_showReplay || Api == null) return y;
+
+            var listH = 150f;
+            var view = new Rect(x, y, w * 0.52f, listH);
+            var content = new Rect(0f, 0f, view.width - 20f, Api.Runs.Count * 32f + 4f);
+            _runScroll = GUI.BeginScrollView(view, _runScroll, content);
+            for (var i = 0; i < Api.Runs.Count; i++)
+            {
+                var run = Api.Runs[i];
+                var on = run.RunId == Api.SelectedRunId;
+                if (GUI.Button(new Rect(0f, i * 32f, content.width, 30f),
+                        run.Name + "   " + run.Mode + "   " + run.CreatedAt,
+                        on ? UITheme.ButtonOn : UITheme.Button))
+                {
+                    Api.SelectRun(run.RunId);
+                }
+            }
+            GUI.EndScrollView();
+
+            // KPI rows for whichever run is selected.
+            var kx = x + w * 0.54f;
+            if (Api.SelectedRunId == null)
+            {
+                GUI.Label(new Rect(kx, y, w * 0.46f, 26f), "select a run to see its KPIs", UITheme.Hint);
+            }
+            else if (Api.RunKpis.Count == 0)
+            {
+                GUI.Label(new Rect(kx, y, w * 0.46f, 52f),
+                    "no KPI rows for this run - live and incomplete episodes have none", UITheme.Wrap);
+            }
+            else
+            {
+                GUI.Label(new Rect(kx, y, w * 0.46f, 24f),
+                    "scenario   seed   wait      thr.", UITheme.Hint);
+                for (var i = 0; i < Api.RunKpis.Count && i < 4; i++)
+                {
+                    var k = Api.RunKpis[i];
+                    GUI.Label(new Rect(kx, y + 26f + i * 26f, w * 0.46f, 24f),
+                        k.Scenario + "   " + k.Seed + "   "
+                        + (k.AvgWait.HasValue ? k.AvgWait.Value.ToString("0.0") : "-") + " s   "
+                        + (k.Throughput.HasValue ? k.Throughput.Value.ToString("0") : "-")
+                        + (k.Gridlocked ? "   GRIDLOCK" : ""),
+                        UITheme.CellBlurb(false));
+                }
+            }
+            return y + listH + 10f;
         }
 
         private static GUIStyle Center(GUIStyle from)
