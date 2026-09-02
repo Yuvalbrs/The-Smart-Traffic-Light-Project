@@ -197,7 +197,13 @@ def run_eval_episode(
 ) -> tuple[EpisodeKPIs, float]:
     """Run one (scenario, eval_seed, algo) episode greedily; return (KPIs, total_reward)."""
     route = write_routes(scenario, eval_seed)
-    stem = f"{scenario.id}_seed{eval_seed}_{algo.name}"
+    # The colon in a `ui:` controller name cannot go into a FILENAME. SUMO parses its own
+    # arguments, and a path containing a colon is read as host:port - evaluating a user model
+    # died with "Given port number '....tripinfo.xml' is not numeric". (On Windows the colon
+    # is simply an illegal path character, so this fails there too, just earlier.)
+    # Only the file stem is sanitised: algo.name keeps its prefix, because that is what marks
+    # these rows as not-campaign for the rest of their life in the database.
+    stem = f"{scenario.id}_seed{eval_seed}_{algo.name}".replace(":", "-")
     jsonl = work_dir / f"{stem}.jsonl"
     tripinfo = work_dir / f"{stem}.tripinfo.xml"
 

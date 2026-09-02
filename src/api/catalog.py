@@ -154,6 +154,44 @@ def list_models() -> dict[str, Any]:
     }
 
 
+#: The newest campaign that actually has rows for ONE scenario.
+#:
+#: :data:`_LATEST_SHA_SQL` answers "what is the newest campaign?" globally, by looking for the
+#: campaign's own DQN arms. That is right for the five confirmatory scenarios and wrong everywhere
+#: else: on a scenario the campaign never covered, it selects a commit with no rows here, and the
+#: baselines the user's own evaluation just produced are filtered out for belonging to a different
+#: commit. The result was a comparison showing one lonely user model with nothing to compare it
+#: against - on the exact screen whose job is comparing.
+#:
+#: ``ui:`` rows are excluded from the vote so a user model can never define its own campaign.
+_LATEST_SHA_FOR_SCENARIO_SQL = text(
+    """
+    SELECT r.git_sha
+      FROM experiment_run r
+      JOIN episode e ON e.run_id_fk = r.id
+     WHERE r.mode = :mode
+       AND r.git_sha IS NOT NULL
+       AND e.scenario = :scenario
+       AND r.controller NOT LIKE 'ui:%'
+     GROUP BY r.git_sha
+     ORDER BY MAX(r.created_at) DESC
+     LIMIT 1
+    """
+)
+
+#: Does the chosen campaign have any rows for this scenario at all?
+_SCENARIO_IN_CAMPAIGN_SQL = text(
+    """
+    SELECT COUNT(*)
+      FROM experiment_run r
+      JOIN episode e ON e.run_id_fk = r.id
+     WHERE r.mode = :mode
+       AND r.git_sha = :git_sha
+       AND e.scenario = :scenario
+       AND r.controller NOT LIKE 'ui:%'
+    """
+)
+
 _COMPARISON_SQL = text(
     """
     SELECT r.controller                        AS controller,
@@ -236,6 +274,20 @@ def comparison(
         with engine.connect() as conn:
             campaigns = [dict(row) for row in conn.execute(_ALL_SHAS_SQL, {"mode": mode}).mappings()]
             selected = git_sha or conn.execute(_LATEST_SHA_SQL, {"mode": mode}).scalar()
+
+            # Only when the caller did not pin a campaign: if the newest campaign never ran this
+            # scenario, fall back to the newest one that did. That is what lets "train a model,
+            # evaluate it on an empty scene, compare" work at all - the evaluation writes the
+            # three baselines alongside the model, and without this they were invisible.
+            if git_sha is None and selected is not None:
+                covered = conn.execute(
+                    _SCENARIO_IN_CAMPAIGN_SQL,
+                    {"scenario": scenario, "mode": mode, "git_sha": selected},
+                ).scalar()
+                if not covered:
+                    selected = conn.execute(
+                        _LATEST_SHA_FOR_SCENARIO_SQL, {"scenario": scenario, "mode": mode}
+                    ).scalar() or selected
             records = [dict(row) for row in conn.execute(
                 _COMPARISON_SQL, {"scenario": scenario, "mode": mode, "git_sha": selected}
             ).mappings()]

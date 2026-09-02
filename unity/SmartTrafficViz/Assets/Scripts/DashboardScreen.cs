@@ -229,7 +229,9 @@ namespace SmartTraffic
             if (f.ForecastNext30s == null || f.ForecastNext30s.Count == 0)
             {
                 GUI.Label(new Rect(x, y, w, 20f),
-                    "not available for this controller (no forecaster attached)", UITheme.Hint);
+                    "no forecast in this frame - either this controller carries no forecaster, or " +
+                    "it is still collecting the twelve steps of history it needs before it can " +
+                    "predict", UITheme.Hint);
                 return y + 30f;
             }
 

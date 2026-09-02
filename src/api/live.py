@@ -264,7 +264,7 @@ class LiveSession:
                     pressures=np.asarray(pressures).tolist(),
                     avg_wait_so_far=avg_wait,
                     throughput_so_far=throughput,
-                    forecast_next_30s=getattr(self, "_forecast", None),
+                    forecast_next_30s=self._latest_forecast(),
                     seq=int(frame.get("seq", self.status.frames)),
                     episode_id=int(frame.get("episode_id", 0)),
                 )
@@ -274,6 +274,28 @@ class LiveSession:
 
         self._pace()
         self._last_tick = time.perf_counter()
+
+    def _latest_forecast(self) -> list[float] | None:
+        """The frozen forecaster's most recent prediction, flattened for the wire.
+
+        This used to read ``getattr(self, "_forecast", None)`` - an attribute NOTHING in the
+        codebase ever assigned. The default silently turned that into None on every frame, so the
+        dashboard's forecast panel said "no forecaster attached" for every controller including
+        the hybrid one, and the forecast the agent was actually consuming was never shown.
+
+        The value was always one attribute away: when a forecaster is attached, ``self._env`` IS
+        the :class:`HybridStateWrapper`, which records each prediction in ``last_forecast``.
+        Controllers without a forecaster have no such attribute, so they still yield None - which
+        is the honest answer for them, and what the panel is built to render.
+
+        None is also correct for the first eleven decisions of a hybrid episode: the wrapper needs
+        twelve steps of history before it can predict, and reports None until it has them. Zeros
+        would read as a confident forecast of no traffic.
+        """
+        pred = getattr(getattr(self, "_env", None), "last_forecast", None)
+        if pred is None:
+            return None
+        return np.asarray(pred, dtype=float).reshape(-1).tolist()
 
     def _pace(self) -> None:
         """Throttle the stepping loop to ``speed`` simulated seconds per wall-clock second.
