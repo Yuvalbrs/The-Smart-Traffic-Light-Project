@@ -406,10 +406,16 @@ namespace SmartTraffic
                 // it. Two separate arrows read as two instructions; a combined arrow reads as
                 // "this lane does both", which is what lane 0 actually does (intersection.con.xml
                 // connects it to the through edge AND the right edge).
+                // Scale so the glyph's far CORNER lands inside the rim, not just its width: the
+                // branch tip sits low and left, and it was the diagonal that overran the disc.
+                var halfW = (ComboHalfWidth - ComboBranchTip) / 2f;
+                var corner = Mathf.Sqrt(halfW * halfW + ComboHalfHeight * ComboHalfHeight);
+                var fit = SignRadius * 0.82f / corner;   // 0.82 leaves a visible blue margin
+
                 var combo = new GameObject("Arrow");
                 combo.transform.SetParent(sign);
-                combo.transform.localPosition = new Vector3(0.28f, -0.05f, 0.30f);
-                combo.transform.localScale = Vector3.one * 1.15f;
+                combo.transform.localPosition = new Vector3(ComboCentreX * fit, 0f, 0.30f);
+                combo.transform.localScale = Vector3.one * fit;
                 combo.AddComponent<MeshFilter>().sharedMesh = ComboArrowMesh;
                 combo.AddComponent<MeshRenderer>();
                 combo.GetComponent<Renderer>().sharedMaterial = ArrowMaterial;
@@ -463,6 +469,20 @@ namespace SmartTraffic
         /// read as a wrench, not an arrow, because the barbs overshoot the shaft tip instead of
         /// meeting it. Double-sided with explicit normals so it lights correctly from either side.
         /// </summary>
+        // The combined glyph is not symmetric about x: it reaches ComboBranchTip to the left and
+        // only ComboHalfWidth to the right, so drawn at x=0 it hangs off one side of the disc.
+        // Both the centring shift and the scale are DERIVED from these, because the first version
+        // eyeballed them and the branch tip ended up outside the sign.
+        private const float ComboHalfWidth = 0.60f;    // straight head, +x extent
+        private const float ComboHalfHeight = 0.95f;
+        private const float ComboBranchTip = -1.10f;   // -x extent
+
+        /// <summary>Shift that puts the glyph's bounding box on the middle of the disc.</summary>
+        private const float ComboCentreX = -(ComboBranchTip + ComboHalfWidth) / 2f;
+
+        /// <summary>Disc radius: the cylinder is scaled to 3.4 across, so 1.7 out.</summary>
+        private const float SignRadius = 1.7f;
+
         private static Mesh _comboArrow;
 
         /// <summary>
@@ -483,15 +503,15 @@ namespace SmartTraffic
                 if (_comboArrow != null) return _comboArrow;
 
                 const float w = 0.26f;      // half shaft width
-                const float hw = 0.64f;     // half head width, straight-ahead
-                const float y0 = -1.05f;    // shaft base
-                const float yHead = 0.34f;  // where the top head begins
-                const float yTip = 1.05f;   // top tip
+                const float hw = ComboHalfWidth;
+                const float y0 = -ComboHalfHeight;
+                const float yHead = 0.30f;  // where the top head begins
+                const float yTip = ComboHalfHeight;
 
-                const float yb = -0.34f;    // centre height of the branch
-                const float bEnd = -0.72f;  // where the branch bar stops
-                const float bTip = -1.24f;  // branch tip
-                const float bhw = 0.52f;    // half head width, branch
+                const float yb = -0.30f;    // centre height of the branch
+                const float bEnd = -0.66f;  // where the branch bar stops
+                const float bTip = ComboBranchTip;
+                const float bhw = 0.48f;    // half head width, branch
 
                 var face = new[]
                 {
