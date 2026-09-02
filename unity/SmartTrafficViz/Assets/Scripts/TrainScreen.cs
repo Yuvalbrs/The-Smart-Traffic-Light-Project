@@ -139,7 +139,7 @@ namespace SmartTraffic
             }
 
             // --- models + evaluation --------------------------------------------------
-            GUI.Label(new Rect(x, y, w, 28f), "Trained models", UITheme.Heading);
+            GUI.Label(new Rect(x, y, w, UITheme.LineH(UITheme.Heading)), "Trained models", UITheme.Heading);
             y += 34f;
 
             // The evaluate row used to be drawn at a fixed offset from the panel bottom, straight

@@ -146,23 +146,26 @@ namespace SmartTraffic
             }
             y += RowH + Gap + Section - Gap;
 
-            GUI.Label(new Rect(x, y, w, 20f),
+            var hintH = UITheme.LineH(UITheme.Hint);
+            GUI.Label(new Rect(x, y, w, hintH),
                 "seed " + cfg.Seed + "   -   same seed and scene means identical traffic",
                 UITheme.Hint);
-            y += 20f;
+            y += hintH;
 
             var status = session == null
                 ? ""
                 : "session: " + session.State + "   " + session.RunningController + " on " +
                   session.RunningScenario + "   sim " + session.SimTime.ToString("F0") + " s";
-            GUI.Label(new Rect(x, y, w, 22f), status, UITheme.Label);
-            y += 22f;
+            // 22f clipped "running" and "dqn-plain" through the middle of their descenders.
+            var statusH = UITheme.LineH(UITheme.Label);
+            GUI.Label(new Rect(x, y, w, statusH), status, UITheme.Label);
+            y += statusH;
 
             if (session != null && session.LastError != null)
             {
                 var err = new GUIStyle(UITheme.Hint);
                 err.normal.textColor = new Color(1f, 0.45f, 0.4f);
-                GUI.Label(new Rect(x, y, w, 18f), session.LastError, err);
+                GUI.Label(new Rect(x, y, w, UITheme.LineH(err)), session.LastError, err);
             }
             y += 18f + Gap;
 

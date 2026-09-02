@@ -41,6 +41,15 @@ namespace SmartTraffic
         public RunConfig Config = RunConfig.Default;
 
         private Vector2 _scroll, _runScroll;
+
+        /// <summary>Height the session+replay block actually consumed last frame.
+        ///
+        /// It used to be a literal in ContentHeight - 60 when the archive was collapsed - while
+        /// DrawReplay drew a heading, a scene row, a controller row and two buttons, well over
+        /// twice that. The scroll rect was therefore SHORTER than its own contents, so the last
+        /// row was unreachable no matter how far you scrolled. Measuring removes the second copy
+        /// of the arithmetic; it self-corrects on the frame after any layout change.</summary>
+        private float _replayH = 210f;
         private bool _showReplay;
 
         public DashboardScreen(string wsUnityUrl)
@@ -108,7 +117,9 @@ namespace SmartTraffic
             cy = DrawMovementBars(0f, cy, cw, "Queue per movement (vehicles)", _latest.QueueLengths);
             cy = DrawMovementBars(0f, cy, cw, "Pressure per movement", _latest.Pressures);
             cy = DrawForecast(0f, cy, cw, _latest);
+            var replayTop = cy;
             cy = DrawReplay(0f, cy, cw);
+            _replayH = cy - replayTop;
             GUI.EndScrollView();
             y = view.yMax + 6f;
 
@@ -152,7 +163,7 @@ namespace SmartTraffic
 
         private static float DrawPhase(float x, float y, float w, DashboardFrame f)
         {
-            GUI.Label(new Rect(x, y, w, 28f), "Signal phase", UITheme.Heading);
+            GUI.Label(new Rect(x, y, w, UITheme.LineH(UITheme.Heading)), "Signal phase", UITheme.Heading);
             y += 34f;
             const float cell = 48f, gap = 9f;
             for (var i = 0; i < 8; i++)
@@ -177,7 +188,7 @@ namespace SmartTraffic
 
         private static float DrawMovementBars(float x, float y, float w, string title, List<float> values)
         {
-            GUI.Label(new Rect(x, y, w, 28f), title, UITheme.Heading);
+            GUI.Label(new Rect(x, y, w, UITheme.LineH(UITheme.Heading)), title, UITheme.Heading);
             y += 34f;
             if (values == null || values.Count == 0)
             {
@@ -213,7 +224,7 @@ namespace SmartTraffic
 
         private static float DrawForecast(float x, float y, float w, DashboardFrame f)
         {
-            GUI.Label(new Rect(x, y, w, 28f), "LSTM forecast", UITheme.Heading);
+            GUI.Label(new Rect(x, y, w, UITheme.LineH(UITheme.Heading)), "LSTM forecast", UITheme.Heading);
             y += 34f;
             if (f.ForecastNext30s == null || f.ForecastNext30s.Count == 0)
             {
@@ -238,8 +249,8 @@ namespace SmartTraffic
             var pressures = f.Pressures != null ? f.Pressures.Count : 12;
             var forecast = f.ForecastNext30s != null && f.ForecastNext30s.Count > 0 ? 12 : 0;
             var bars = (movements + pressures + forecast) * 30f + 260f;
-            var replay = _showReplay ? 360f : 60f;
-            return 190f + bars + replay;
+            // + a line of slack so the final row is never flush against the bottom edge.
+            return 190f + bars + _replayH + 24f;
         }
 
         /// <summary>
@@ -251,7 +262,7 @@ namespace SmartTraffic
         /// </summary>
         private float DrawReplay(float x, float y, float w)
         {
-            GUI.Label(new Rect(x, y, w, 28f), "Session + replay", UITheme.Heading);
+            GUI.Label(new Rect(x, y, w, UITheme.LineH(UITheme.Heading)), "Session + replay", UITheme.Heading);
             y += 34f;
 
             if (Session != null && Api != null)

@@ -177,7 +177,8 @@ namespace SmartTraffic
             var bar = new Rect(0f, Screen.height - barH, Screen.width, barH);
             UITheme.Backdrop(bar);
 
-            GUI.Label(new Rect(pad + 8f, bar.y + 8f, 130f, 26f), "CAMERA", UITheme.Heading);
+            GUI.Label(new Rect(pad + 8f, bar.y + 8f, 130f, UITheme.LineH(UITheme.Heading)),
+                "CAMERA", UITheme.Heading);
 
             var hint = free
                 ? "WASD move   Q/E down/up   shift faster   right-drag look   Esc orbit"

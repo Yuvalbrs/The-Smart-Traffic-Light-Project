@@ -177,6 +177,19 @@ namespace SmartTraffic
         public static GUIStyle Wrap { get { Ensure(); return _wrap; } }
 
         /// <summary>Fills a rect with the panel background - for bars behind controls.</summary>
+        /// <summary>The minimum height one line of <paramref name="style"/> needs, INCLUDING the
+        /// descenders of letters like p, g and y.
+        ///
+        /// Every clipped label in this UI has had the same cause: a Rect height typed as a literal
+        /// that was correct for the font size of the day, and then the type grew. Sizes and the
+        /// layouts built around them are one decision, so the layout asks the style rather than
+        /// carrying a second, silently stale copy of the answer.</summary>
+        public static float LineH(GUIStyle style)
+        {
+            Ensure();
+            return style.CalcSize(new GUIContent("Ag")).y + 2f;
+        }
+
         public static void Backdrop(Rect rect)
         {
             Ensure();
