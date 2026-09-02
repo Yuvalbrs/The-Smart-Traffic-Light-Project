@@ -401,8 +401,18 @@ namespace SmartTraffic
             // waiting there look like a stuck vehicle. Two arrows say what the lane actually is.
             if (turn == 2)
             {
-                AddArrow(sign, 0f, new Vector3(0.80f, 0f, 0.30f), 0.95f);    // straight
-                AddArrow(sign, 90f, new Vector3(-0.80f, 0f, 0.30f), 0.95f);  // right
+                // ONE arrow with two heads on a shared stem, which is how a real shared-lane
+                // sign is drawn - the branch grows out of the shaft rather than sitting beside
+                // it. Two separate arrows read as two instructions; a combined arrow reads as
+                // "this lane does both", which is what lane 0 actually does (intersection.con.xml
+                // connects it to the through edge AND the right edge).
+                var combo = new GameObject("Arrow");
+                combo.transform.SetParent(sign);
+                combo.transform.localPosition = new Vector3(0.28f, -0.05f, 0.30f);
+                combo.transform.localScale = Vector3.one * 1.15f;
+                combo.AddComponent<MeshFilter>().sharedMesh = ComboArrowMesh;
+                combo.AddComponent<MeshRenderer>();
+                combo.GetComponent<Renderer>().sharedMaterial = ArrowMaterial;
             }
             else
             {
@@ -453,6 +463,96 @@ namespace SmartTraffic
         /// read as a wrench, not an arrow, because the barbs overshoot the shaft tip instead of
         /// meeting it. Double-sided with explicit normals so it lights correctly from either side.
         /// </summary>
+        private static Mesh _comboArrow;
+
+        /// <summary>
+        /// A straight-ahead arrow with a right-turn branch off its shaft, as one connected shape.
+        ///
+        /// Drawn as overlapping pieces - shaft, top head, branch bar, branch head - rather than as
+        /// one traced outline. They are coplanar and share one flat emissive material, so the
+        /// silhouette is identical to a properly unioned polygon and the geometry is a fraction of
+        /// the work. The branch bar deliberately starts at x=0, inside the shaft, so the join is
+        /// solid with no seam at the corner.
+        ///
+        /// The branch runs to local -X because local +X is the driver's left (see BuildSign).
+        /// </summary>
+        private static Mesh ComboArrowMesh
+        {
+            get
+            {
+                if (_comboArrow != null) return _comboArrow;
+
+                const float w = 0.26f;      // half shaft width
+                const float hw = 0.64f;     // half head width, straight-ahead
+                const float y0 = -1.05f;    // shaft base
+                const float yHead = 0.34f;  // where the top head begins
+                const float yTip = 1.05f;   // top tip
+
+                const float yb = -0.34f;    // centre height of the branch
+                const float bEnd = -0.72f;  // where the branch bar stops
+                const float bTip = -1.24f;  // branch tip
+                const float bhw = 0.52f;    // half head width, branch
+
+                var face = new[]
+                {
+                    // shaft
+                    new Vector3(-w, y0, 0f), new Vector3(w, y0, 0f),
+                    new Vector3(w, yHead, 0f), new Vector3(-w, yHead, 0f),
+                    // top head
+                    new Vector3(-hw, yHead, 0f), new Vector3(hw, yHead, 0f),
+                    new Vector3(0f, yTip, 0f),
+                    // branch bar, starting inside the shaft
+                    new Vector3(0f, yb - w, 0f), new Vector3(bEnd, yb - w, 0f),
+                    new Vector3(bEnd, yb + w, 0f), new Vector3(0f, yb + w, 0f),
+                    // branch head
+                    new Vector3(bEnd, yb + bhw, 0f), new Vector3(bEnd, yb - bhw, 0f),
+                    new Vector3(bTip, yb, 0f),
+                };
+                var faceTris = new[]
+                {
+                    0, 2, 1, 0, 3, 2,        // shaft
+                    4, 6, 5,                 // top head
+                    7, 9, 8, 7, 10, 9,       // branch bar
+                    11, 13, 12,              // branch head
+                };
+
+                _comboArrow = DoubleSided("ComboArrow", face, faceTris);
+                return _comboArrow;
+            }
+        }
+
+        /// <summary>
+        /// A flat face, emitted front and back with opposite winding and explicit normals.
+        ///
+        /// These signs are vertical faces with horizontal normals, so a single-sided quad vanishes
+        /// from behind and the overhead key light barely grazes either side - which is why the
+        /// material is emissive rather than white paint.
+        /// </summary>
+        private static Mesh DoubleSided(string name, Vector3[] face, int[] faceTris)
+        {
+            var verts = new Vector3[face.Length * 2];
+            var norms = new Vector3[face.Length * 2];
+            var tris = new int[faceTris.Length * 2];
+            for (var i = 0; i < face.Length; i++)
+            {
+                verts[i] = face[i];
+                verts[i + face.Length] = face[i];
+                norms[i] = Vector3.forward;
+                norms[i + face.Length] = Vector3.back;
+            }
+            for (var i = 0; i < faceTris.Length; i++) tris[i] = faceTris[i];
+            for (var i = 0; i < faceTris.Length; i += 3)
+            {
+                tris[faceTris.Length + i] = faceTris[i] + face.Length;
+                tris[faceTris.Length + i + 1] = faceTris[i + 2] + face.Length;
+                tris[faceTris.Length + i + 2] = faceTris[i + 1] + face.Length;
+            }
+
+            var mesh = new Mesh { name = name, vertices = verts, normals = norms, triangles = tris };
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
         private static Mesh ArrowMesh
         {
             get
