@@ -13,30 +13,9 @@ Positioned as **replication-plus-adaptation** of MPLight (Chen et al., 2020) —
 
 ## How to run it
 
-There are three ways in. Pick the first one that matches you.
+### 1. Set it up (once)
 
----
-
-### A. "I just want to see it work" — download the release
-
-No Python, no build. **Windows only.**
-
-1. Go to the [latest release](https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/latest).
-2. Download **`SmartTrafficViz-win64.zip`** and extract it anywhere.
-3. Run `unity/SmartTrafficViz/Build/SmartTrafficViz.exe`.
-
-Windows will warn that the publisher is unknown — the executable is unsigned. Choose
-*More info* -> *Run anyway*.
-
-**Important:** the 3-D client is a *viewer*. On its own it draws the junction and reports
-`connecting`, because the simulation itself runs in the Python hub. For traffic to appear you need
-option B or C running as well.
-
----
-
-### B. Run the whole thing from source (the normal way)
-
-**You need:** Windows, Python 3.11+, Node.js, and SUMO 1.20+ with `SUMO_HOME` set.
+You need Windows, Python 3.11+, Node.js, and SUMO (see [Requirements](#requirements)).
 
 ```bash
 git clone https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project.git
@@ -47,10 +26,10 @@ python -m venv .venv
 .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Then add the data and the trained models. **These are not in git** — a 7 MB database and 20 MB of
-model weights do not belong in a repository — so they ship as release assets. Download these from
-the [latest release](https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/latest)
-and extract each one **in the repository root**:
+Then add the data and the trained models. **They are not in git** — a 7 MB database and 20 MB of
+weights do not belong in a repository — so they ship as release assets. Download all four from the
+[latest release](https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/latest) and
+extract each one **in the repository root**:
 
 | Asset | Without it |
 |---|---|
@@ -59,64 +38,65 @@ and extract each one **in the repository root**:
 | `external-data.zip` | the real-measured-demand scenario cannot be rebuilt |
 | `SmartTrafficViz-win64.zip` | no 3-D viewer |
 
-Now start it:
+### 2. Start it
 
 ```bash
 run_app.bat
 ```
 
-That builds the dashboard if needed, starts the hub, and opens the browser at
-**http://localhost:8000**.
+That builds the dashboard if needed, starts the hub, and opens **http://localhost:8000**.
 
-**To watch an episode:** open **Live**, choose a scene and a controller, press **RUN**. A speed of
-`5x` is a good default — a full episode is one simulated hour, so `1x` really does take an hour.
-Press **Reset** to stop a run and clear the junction.
+Open **Live**, pick a scene and a controller, press **RUN**. Use `5x` speed — one episode is a
+full simulated hour, so `1x` really does take an hour. **Reset** stops a run and clears the
+junction.
 
-When the episode ends you get a **Simulation complete** panel with that run's seven KPIs, and — on
-scenes SCN-01 to SCN-05 — a button to compare it against the recorded campaign.
+When the episode ends you get a **Simulation complete** panel with that run's seven KPIs, and on
+scenes SCN-01 to SCN-05 a button to compare it against the recorded campaign.
 
-**For the 3-D view:** with the hub running, launch
-`unity/SmartTrafficViz/Build/SmartTrafficViz.exe`. It connects to the hub automatically.
+### 3. The 3-D viewer
 
----
+With the hub already running:
 
-### C. Run the backend in Docker
+```
+unity\SmartTrafficViz\Build\SmartTrafficViz.exe
+```
 
-Everything except the 3-D client, in one command. Needs Docker Desktop running.
+It connects to the hub by itself. Windows will warn that the publisher is unknown — the executable
+is unsigned; choose *More info* → *Run anyway*.
+
+The viewer is a **client**. Started on its own it draws the junction and reports `connecting`,
+because the simulation runs in the hub, not in the viewer.
+
+### Or: run the backend in Docker
+
+Everything except the 3-D viewer, in one command. Needs Docker Desktop running.
 
 ```bash
 docker compose up --build
 ```
 
-Then open **http://localhost:8000**. First build takes 5-15 minutes; after that it is seconds.
-Full details in [`README-docker.md`](README-docker.md).
+Then open **http://localhost:8000**. The first build takes 5–15 minutes; after that it is seconds.
+The 3-D viewer still runs natively and still connects to `localhost:8000`. Details in
+[`README-docker.md`](README-docker.md).
 
----
+### Never run both at once
 
-### One rule: never run B and C at the same time
+`run_app.bat` and Docker both write `data/traffic.db`, and on Windows the Docker bind mount cannot
+share a SQLite file with the host. Run one **or** the other. If you use both, the container's
+handle goes stale and every later write fails **silently** — episodes still run and still stream,
+they are just never recorded, and they vanish from the archive.
 
-Both write the same `data/traffic.db`, and on Windows the Docker bind mount cannot share a SQLite
-file with the host. If you open the database from the host while the container is running, the
-container's handle goes stale and **every** later write fails — episodes still run and still
-stream, they simply never get recorded, and they vanish from the archive.
+If that has already happened, `docker compose restart hub` fixes it. Nothing is corrupted.
 
-Use `run_app.bat` **or** `docker compose up`. If writes have already started failing,
-`docker compose restart hub` fixes it; nothing is corrupted.
-
----
-
-### Quick reference
+### Other commands
 
 ```bash
-run_app.bat                                        # everything, one double-click
-docker compose up --build                          # the backend, containerised
-
-LIBSUMO_AS_TRACI=1 .venv/Scripts/python -m pytest -q          # 432 tests, ~90 s
+LIBSUMO_AS_TRACI=1 .venv/Scripts/python -m pytest -q      # 432 tests, ~90 s
 .venv/Scripts/python -m scripts.train_dqn --seed 42 --variant plain --run-dir runs/mine
 ```
 
-`LIBSUMO_AS_TRACI=1` matters: without it SUMO falls back to a socket client that is roughly ten
-times slower.
+`LIBSUMO_AS_TRACI=1` matters: without it SUMO falls back to a socket client roughly ten times
+slower.
 
 ## Status
 
@@ -181,7 +161,7 @@ tests/           295 tests
     what the Docker image uses, and it runs full episodes with no native SUMO installed.
 - **Node.js 18+** — the dashboard is built from source; `frontend/dist/` is not committed.
 - **torch** — deliberately absent from `requirements.txt` so the CPU/CUDA choice stays yours.
-  See [GPU / torch](#gpu--torch-do-this-deliberately-later). Required by every DQN controller.
+  See [GPU / torch](#gpu--torch). Required by every DQN controller.
 
 ### What a fresh clone does *not* include
 
@@ -190,15 +170,7 @@ reproducible. So a clone runs the **three baselines** immediately, and for the D
 either train one from the Train tab or fetch the checkpoint bundle from the GitHub release. The
 Compare tab needs `data/traffic.db`; without it, it says so rather than showing an empty table.
 
-## Setup
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### GPU / torch (do this deliberately, later)
+## GPU / torch
 
 `torch` is intentionally **not** in `requirements.txt`. T-00-01 does not need it, and the CUDA
 build must be installed with the correct index URL for the GPU (an NVIDIA GPU is present on the dev
