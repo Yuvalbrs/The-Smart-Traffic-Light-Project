@@ -9,7 +9,8 @@ non-RL baselines (Webster fixed-time, max-pressure, SUMO actuated) under a multi
 
 ## How to run it
 
-Windows. Install the three prerequisites below, then three commands.
+Windows is the primary target; **[Linux](#on-linux) works too, minus the 3-D viewer.**
+Install the three prerequisites below, then three commands.
 
 ### 0. Prerequisites
 
@@ -107,6 +108,76 @@ is unsigned; choose *More info* → *Run anyway*.
 
 The viewer is a **client**. Started on its own it draws the junction and reports `connecting`,
 because the simulation runs in the hub, not in the viewer.
+
+---
+
+### On Linux
+
+Everything runs except the 3-D viewer, which is a Windows binary
+(`src/api/viewer.py` resolves `SmartTrafficViz.exe`, and the only Unity build target is
+`BuildWindows`). The dashboard, the hub, training and the full test suite are unaffected, and the
+Compare tab - the one that shows the campaign - is part of the dashboard, not the viewer.
+
+**0. Prerequisites.** The project needs **Python 3.11 or newer**, and this is the step that bites:
+Ubuntu 22.04 ships 3.10, which is too old. Check first:
+
+```bash
+python3 --version
+```
+
+Debian / Ubuntu 24.04+ (already 3.12):
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git nodejs npm
+```
+
+Ubuntu 22.04 or older, where `python3` is 3.10:
+
+```bash
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt update
+sudo apt install -y python3.11 python3.11-venv git nodejs npm
+```
+
+Fedora: `sudo dnf install -y python3.11 git nodejs npm`. Arch: `sudo pacman -S python git nodejs npm`.
+
+`python3-venv` **is** a real package here - unlike on Windows, Debian and Ubuntu split it out of the
+standard library, and `setup.bat`'s job of creating `.venv` fails without it.
+
+**1-2. Get it and set it up.** There is no `setup.sh`; `setup.bat` is only a launcher, and the
+script it launches is portable:
+
+```bash
+git clone https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project.git
+cd The-Smart-Traffic-Light-Project
+python3.11 -m scripts.setup --check     # or python3, if that is already 3.11+
+python3.11 -m scripts.setup
+```
+
+It creates `.venv`, installs the requirements and CPU torch, installs the `eclipse-sumo` wheel if
+no native SUMO is on `PATH`, and builds the dashboard - the same as on Windows.
+
+**3. Start it.**
+
+```bash
+.venv/bin/python run_app.py
+```
+
+Then open <http://localhost:8000>. Some of the launcher's *error* messages still quote Windows
+paths (`.venv\Scripts\...`); the equivalent is always `.venv/bin/`.
+
+**Or use Docker, which is the better path here.** Docker runs natively on Linux rather than in a
+VM, and the SQLite bind-mount hazard described below is a Docker-Desktop-on-Windows problem that
+does not apply:
+
+```bash
+python3.11 -m scripts.setup --docker
+GIT_SHA=$(git rev-parse HEAD) docker compose up --build
+```
+
+Still do not run `run_app.py` and the container at the same time - two processes writing one
+SQLite file is a bad idea on any OS.
 
 ---
 
