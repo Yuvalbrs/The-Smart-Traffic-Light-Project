@@ -5,11 +5,7 @@ signal phase at a **single 4-way intersection** in the **SUMO** simulator (via T
 RL state augmented by a **frozen LSTM forecast** of near-future traffic. Evaluated against three
 non-RL baselines (Webster fixed-time, max-pressure, SUMO actuated) under a multi-seed protocol.
 
-Positioned as **replication-plus-adaptation** of MPLight (Chen et al., 2020) — not novel research.
 
-> **Design docs live in an Obsidian vault** (the authoring source of truth); see
-> [`docs/README.md`](docs/README.md). Everything the code *reads at runtime* ships here —
-> `config/movements.yaml` is the movement/phase spec, and a clone is self-contained.
 
 ## How to run it
 
