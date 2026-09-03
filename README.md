@@ -9,7 +9,40 @@ non-RL baselines (Webster fixed-time, max-pressure, SUMO actuated) under a multi
 
 ## How to run it
 
-Three commands on a machine with nothing installed but Python and git. Windows.
+Windows. Install the three prerequisites below, then three commands.
+
+### 0. Prerequisites
+
+`setup.bat` installs SUMO and torch for you. It cannot install the toolchain it runs *on*:
+
+```powershell
+winget install --id Python.Python.3.11 --exact --source winget
+winget install --id Git.Git --exact --source winget
+winget install --id OpenJS.NodeJS.LTS --exact --source winget
+```
+
+Then **close the terminal and open a new one** - PATH changes do not reach a window that was
+already open - and check that all three answer:
+
+```powershell
+py --version      # 3.11 or newer
+git --version
+node --version    # 18 or newer
+```
+
+No `winget`? Install the same three by hand: [Python](https://www.python.org/downloads/) - tick
+**"Add python.exe to PATH"** in the installer, and avoid the Microsoft Store build, which answers
+to `python` and does nothing useful - then [Git](https://git-scm.com/download/win) and
+[Node.js LTS](https://nodejs.org).
+
+**`venv` needs no separate install.** It is part of the Python standard library and the Windows
+installer ships it; `setup.bat` creates `.venv` itself. (The habit of installing it comes from
+Linux, where `python3-venv` really is a separate package.)
+
+**Node.js is not optional if you want the dashboard.** `frontend/dist/` is not committed, so with
+no `npm` on the machine there is nothing to serve at `/`: the REST API and the 3-D viewer still
+work, but the Live and Compare tabs do not exist. Docker builds its own copy and needs none of
+this.
 
 ### 1. Get it
 
@@ -162,7 +195,8 @@ tests/           432 tests
 
 ## Requirements
 
-**You need Python 3.11+ and git. `setup.bat` handles the rest** — including SUMO, which is the
+**You need Python 3.11+, git and Node.js** (see [Prerequisites](#0-prerequisites) for the
+one-line installs). **`setup.bat` handles everything else** — including SUMO, which is the
 one that used to catch people out. Run `setup.bat --check` to see where you stand.
 
 What it installs for you, and why each is needed:
