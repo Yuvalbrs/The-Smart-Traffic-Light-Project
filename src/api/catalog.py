@@ -249,6 +249,34 @@ _ALL_SHAS_SQL = text(
 )
 
 
+def _row_meta(controller: str) -> dict[str, Any]:
+    """Display metadata for one comparison row.
+
+    A campaign row is looked up directly. A ``ui:`` row - a model trained in this application -
+    used to fall through to its raw run-directory name, so the same variant appeared as
+    "DQN + random forecast (control)" on one scenario and "random-lstm_seed42_t-4" on another.
+    Same thing, two names, which reads as two different controllers.
+
+    It now takes the variant's own label, minus the campaign's parenthetical, plus "(app)":
+
+        random-lstm  ->  campaign: "DQN + random forecast (control)"
+                         yours:    "DQN + random forecast (app)"
+
+    Short enough not to truncate in the table, and the distinction it carries is real - these
+    rows are also rendered in italics and are skipped when the best value in a column is picked.
+    """
+    if not controller.startswith("ui:"):
+        return CONTROLLER_META.get(controller, {"label": controller, "is_ours": False})
+
+    stem = controller.removeprefix("ui:")
+    # eval_runner labels a user model by its run directory: "<variant>_seed<n>_<tag>".
+    variant = stem.split("_", 1)[0]
+    pretty = CONTROLLER_META.get(variant, {}).get("label")
+    if not pretty:
+        return {"label": stem, "is_ours": False}
+    return {"label": pretty.split(" (")[0] + " (app)", "is_ours": False}
+
+
 @router.get("/comparison")
 def comparison(
     request: Request,
@@ -322,10 +350,7 @@ def comparison(
         is_user_model = str(rec["controller"]).startswith("ui:")
         if is_user_model and rec["git_sha"]:
             user_shas.add(str(rec["git_sha"]))
-        meta = CONTROLLER_META.get(
-            rec["controller"],
-            {"label": str(rec["controller"]).removeprefix("ui:"), "is_ours": False},
-        )
+        meta = _row_meta(str(rec["controller"]))
         row: dict[str, Any] = {
             "controller": rec["controller"],
             "label": meta["label"],
