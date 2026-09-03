@@ -54,9 +54,13 @@ cd The-Smart-Traffic-Light-Project
 
 ### 2. Set it up
 
-```bash
-setup.bat
+```powershell
+.\setup.bat
 ```
+
+The `.\` is not decoration: PowerShell is the default shell on Windows 11 and it refuses to
+run anything from the current directory without it. In `cmd.exe` plain `setup.bat` also works;
+in Git Bash it is `./setup.bat`, with a forward slash.
 
 One command, and it is safe to re-run — every step is skipped if it is already done.
 
@@ -77,13 +81,13 @@ alike:
 | `external-data.zip` | the real-measured-demand scenario cannot be rebuilt |
 | `SmartTrafficViz-win64.zip` | no 3-D viewer (the dashboard still works) |
 
-To see what your machine has without changing anything: `setup.bat --check`. That is also the
+To see what your machine has without changing anything: `.\setup.bat --check`. That is also the
 first thing to run when something does not work.
 
 ### 3. Start it
 
-```bash
-run_app.bat
+```powershell
+.\run_app.bat
 ```
 
 That builds the dashboard if needed, starts the hub, and opens **http://localhost:8000**.
@@ -186,8 +190,8 @@ SQLite file is a bad idea on any OS.
 If you would rather install nothing at all — no Python packages, no SUMO, no Node — and you have
 Docker Desktop running, the backend comes up in one command:
 
-```bash
-setup.bat --docker          # fetches the data and the viewer only
+```powershell
+.\setup.bat --docker         # fetches the data and the viewer only
 docker compose up --build   # then open http://localhost:8000
 ```
 
@@ -268,7 +272,7 @@ tests/           432 tests
 
 **You need Python 3.11+, git and Node.js** (see [Prerequisites](#0-prerequisites) for the
 one-line installs). **`setup.bat` handles everything else** — including SUMO, which is the
-one that used to catch people out. Run `setup.bat --check` to see where you stand.
+one that used to catch people out. Run `.\setup.bat --check` to see where you stand.
 
 What it installs for you, and why each is needed:
 
