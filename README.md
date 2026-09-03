@@ -101,17 +101,39 @@ scenes SCN-01 to SCN-05 a button to compare it against the recorded campaign.
 
 ### 4. The 3-D viewer
 
-With the hub already running:
+`run_app.bat` deliberately does not open it, and that is not an omission. The viewer is a *view* of
+a live episode, not a dependency of the web app: starting it at boot would make a machine with no
+player build fail over something optional, and a demo that always opens a second window cannot
+choose not to.
 
+Open it from the dashboard: **Live** tab, Control Panel, the **open 3-D view** button underneath
+*stop session*. The hub launches the player onto the same episode feed. If the button is greyed
+out, hover it - the tooltip is either the path it resolved or the reason it cannot launch.
+
+By hand, equivalently:
+
+```powershell
+.\unity\SmartTrafficViz\Build\SmartTrafficViz.exe
 ```
-unity\SmartTrafficViz\Build\SmartTrafficViz.exe
-```
 
-It connects to the hub by itself. Windows will warn that the publisher is unknown — the executable
-is unsigned; choose *More info* → *Run anyway*.
+Either way **start the hub first**. The viewer is a **client**: on its own it draws the junction
+and reports `connecting`, because the simulation runs in the hub, not in the viewer.
 
-The viewer is a **client**. Started on its own it draws the junction and reports `connecting`,
-because the simulation runs in the hub, not in the viewer.
+Windows will warn that the publisher is unknown - the executable is unsigned; choose
+*More info* -> *Run anyway*.
+
+### 5. Stopping it
+
+| what | how |
+|---|---|
+| a running episode | **stop session** in the Control Panel, or **Reset**, which also clears the junction |
+| the 3-D viewer | close its window. `DELETE /viewer` does the same, but the launch button is disabled while it runs, so there is no UI for it |
+| the hub | **Ctrl+C** in the terminal running `.\run_app.bat` - it terminates the uvicorn child for you |
+| Docker instead of the hub | `docker compose down` |
+
+Close the terminal window instead of pressing Ctrl+C and uvicorn keeps port 8000; the next
+`.\run_app.bat` then refuses to start, saying a hub is already answering. The viewer is
+launched by the hub rather than by the launcher, so it can outlive Ctrl+C - close its window too.
 
 ---
 
