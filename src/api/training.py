@@ -39,6 +39,21 @@ from src.api.wire import SCHEMA_VERSION
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNS_DIR = _REPO_ROOT / "runs"
 
+
+def _slug(label: str | None) -> str:
+    """A user-typed label, reduced to something safe to put in a path.
+
+    Underscores become hyphens deliberately: the run directory is
+    ``ui_<variant>_seed<n>_<slug>``, so keeping the slug underscore-free is what lets the
+    comparison recover it as the final segment.
+    """
+    if not label:
+        return ""
+    out = "".join(ch if (ch.isalnum() or ch == "-") else "-" for ch in label.strip())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-")[:24]
+
 TRAINING_MSG = "training_frame"
 VARIANTS = ("plain", "hybrid", "random-lstm")
 
@@ -273,7 +288,15 @@ class TrainingManager:
             self._counter += 1
             job_id = f"t-{self._counter}"
 
-        run_dir = self._runs_dir / f"ui_{variant}_seed{seed}_{job_id}"
+        # The label the user types is what they will look for in the comparison, so it has to
+        # reach the RUN DIRECTORY - the evaluation names the controller after that directory, and
+        # a label kept only on the job object never reaches the table. Falls back to the job id
+        # when nothing was typed.
+        #
+        # No underscores survive sanitising, which is what lets the display layer recover the
+        # typed part as the last underscore-separated segment. No colons either: a colon in a
+        # path is read by SUMO as host:port and by Windows as an illegal filename.
+        run_dir = self._runs_dir / f"ui_{variant}_seed{seed}_{_slug(label) or job_id}"
         cmd = _build_command(variant, seed, episodes, episode_length_s, run_dir, train_scenarios)
 
         env = dict(os.environ)

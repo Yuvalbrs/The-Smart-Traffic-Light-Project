@@ -20,6 +20,8 @@ landed. A table that cannot say which code produced it is exactly how a stale nu
 
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 from typing import Any
 
@@ -269,8 +271,17 @@ def _row_meta(controller: str) -> dict[str, Any]:
         return CONTROLLER_META.get(controller, {"label": controller, "is_ours": False})
 
     stem = controller.removeprefix("ui:")
-    # eval_runner labels a user model by its run directory: "<variant>_seed<n>_<tag>".
-    variant = stem.split("_", 1)[0]
+    # eval_runner labels a user model by its run directory: "<variant>_seed<n>_<tag>", where the
+    # tag is the label the user typed on the training screen, or the job id if they typed nothing.
+    parts = stem.split("_")
+    variant = parts[0]
+    tag = parts[-1] if len(parts) > 2 else ""
+
+    # A job id ("t-4") is bookkeeping, not a name; anything else is what the user chose to call
+    # this model, and is what they will be looking for in the table.
+    if tag and not re.fullmatch(r"t-\d+", tag):
+        return {"label": tag + " (app)", "is_ours": False}
+
     pretty = CONTROLLER_META.get(variant, {}).get("label")
     if not pretty:
         return {"label": stem, "is_ours": False}

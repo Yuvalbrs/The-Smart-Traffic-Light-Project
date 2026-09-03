@@ -65,7 +65,10 @@ def park():
         c.execute("delete from observation where episode_id_fk in (%s)" % eq, ep_ids)
         c.execute("delete from episode_kpi where episode_id_fk in (%s)" % eq, ep_ids)
         c.execute("delete from episode where id in (%s)" % eq, ep_ids)
-    c.execute("delete from experiment_run where id in (%s)" % q, run_ids)
+    # NOT the experiment_run rows. One run holds episodes for EVERY scenario in the campaign,
+    # so deleting the parents orphans the other four scenarios' episodes and they vanish from
+    # every query that joins through the run. That is exactly what happened the first time this
+    # ran: SCN-05 dropped from 246 episodes to 6.
     c.commit()
     left = c.execute(
         "select count(*) from episode e join experiment_run r on e.run_id_fk=r.id "
@@ -79,6 +82,8 @@ def restore():
     dump = json.loads(PARK.read_text(encoding="utf-8"))
     c = sqlite3.connect(DB)
     total = 0
+    # experiment_run is included for the case where a run really did belong to this scenario
+    # alone; "insert or replace" makes re-inserting a row that still exists harmless.
     for t in TABLES:                      # parents before children
         rows = dump["tables"].get(t) or []
         for row in rows:
