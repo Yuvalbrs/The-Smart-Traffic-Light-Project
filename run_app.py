@@ -93,7 +93,7 @@ def check_no_hub_already_running(port: int) -> None:
         "  Use one or the other:\n"
         "    docker compose down            # then re-run this\n"
         f"    ...or open the running one:   http://127.0.0.1:{port}/\n"
-        f"    ...or use another port:       run_app.bat --port {port + 1}"
+        f"    ...or use another port:       .\\run_app.bat --port {port + 1}"
     )
 
 
@@ -155,7 +155,7 @@ def check_sumo_home() -> None:
         "  Or, if you have SUMO natively (https://sumo.dlr.de), point at it in PowerShell:\n"
         '    setx SUMO_HOME "C:\\Program Files (x86)\\Eclipse\\Sumo"\n'
         "  setx does not affect the current terminal - reopen it, or just double-click "
-        "run_app.bat again."
+        ".\\run_app.bat again."
     )
 
 

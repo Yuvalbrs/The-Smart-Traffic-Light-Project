@@ -254,15 +254,15 @@ def main() -> None:
 
     fetch_assets(force=args.force)
 
-    print("\n== next ====================================================================")
     if args.docker:
+        print("\n== next ====================================================================")
         print("  docker compose up --build     then open http://localhost:8000")
         print("  3-D viewer (runs natively):   unity/SmartTrafficViz/Build/SmartTrafficViz.exe")
         return
 
     install_native(have_sumo=found["sumo"])
     print("\n== next ====================================================================")
-    print("  run_app.bat" if IS_WIN else "  python run_app.py")
+    print("  .\\run_app.bat" if IS_WIN else "  python run_app.py")
     print("  then open http://localhost:8000")
     print("  3-D viewer (start the hub first): unity/SmartTrafficViz/Build/SmartTrafficViz.exe")
 
