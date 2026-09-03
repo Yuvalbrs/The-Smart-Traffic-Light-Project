@@ -3,16 +3,20 @@
 SCN-03 is one of the five CONFIRMATORY scenarios. Its rows are pre-registered evidence, so they
 are exported in full before anything is deleted and can be put back byte-for-byte afterwards.
 
-    python scn03_park.py park      -> export to a JSON file, then delete
-    python scn03_park.py restore   -> re-insert exactly what was exported
+    python -m scripts.park_scenario_rows park      -> export to a JSON file, then delete
+    python -m scripts.park_scenario_rows restore   -> re-insert exactly what was exported
 """
 import json
 import sqlite3
 import sys
 from pathlib import Path
 
-DB = Path(r"C:/Year3/smart-traffic-rl/data/traffic.db")
-PARK = Path(r"C:/Year3/smart-traffic-rl/data/scn03_parked.json")
+# Resolved from this file, never hardcoded. The absolute dev-machine paths that used to sit here
+# crashed the script on every other computer - a poor look in a repository whose central claim is
+# that its results reproduce somewhere other than the machine that produced them.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+DB = _REPO_ROOT / "data" / "traffic.db"
+PARK = _REPO_ROOT / "data" / "scn03_parked.json"
 SCEN = "SCN-03"
 
 TABLES = ("experiment_run", "episode", "episode_kpi", "observation")

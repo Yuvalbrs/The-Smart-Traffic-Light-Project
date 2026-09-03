@@ -39,3 +39,7 @@ data/*
 data/eval/*
 !data/eval/eval_results.csv
 !data/eval/analysis/
+
+# Release packaging (scripts/make_release_assets.py) and the setup downloader cache
+dist/
+.cache/

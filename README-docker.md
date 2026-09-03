@@ -60,17 +60,17 @@ recorded campaign is a release asset, not source — it is far too large for git
 
 ```bash
 # from the repository root, before `docker compose up`
-curl -L -o traffic-db.zip \
-  https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/download/v1.0.0/traffic-db.zip
-unzip traffic-db.zip          # -> data/traffic.db
-
-curl -L -o checkpoints.zip \
-  https://github.com/Yuvalbrs/The-Smart-Traffic-Light-Project/releases/download/v1.0.0/checkpoints.zip
-unzip checkpoints.zip         # -> checkpoints/ and runs/
+setup.bat --docker
 ```
 
-Both land exactly where the volumes expect them. Without `checkpoints.zip` the DQN controllers
-cannot load and only Webster, max-pressure and actuated will run.
+That fetches the four release assets from the *latest* release, verifies each against the
+checksum GitHub publishes for it, and extracts them exactly where the bind mounts expect. It
+installs no Python packages and no SUMO — the container provides those — so it is only the data
+step. Re-running it is a no-op.
+
+Pinning the version by hand instead is still fine; the assets are ordinary zips extracted at the
+repository root. Without `checkpoints.zip` the DQN controllers cannot load and only Webster,
+max-pressure and actuated will run.
 
 ---
 

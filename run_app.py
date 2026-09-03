@@ -61,25 +61,102 @@ def _fail(message: str) -> "NoReturn":  # noqa: F821 - typing.NoReturn not impor
     raise LauncherError(message)
 
 
+def check_no_hub_already_running(port: int) -> None:
+    """Refuse to start a second hub over the first one's database.
+
+    This is the project's sharpest footgun made unarmable. `data/traffic.db` is SQLite in WAL mode
+    and the container reaches it through a Docker Desktop bind mount, which on Windows cannot share
+    the file with the host. If the container is up and the native hub is started too, the
+    container's handle goes stale and **every subsequent write fails silently**: episodes still run
+    and still stream to the dashboard and the 3-D viewer, they simply never reach the database and
+    vanish from the archive. Nothing in the UI reports it.
+
+    The README has said "never run both" since the day it was diagnosed, but a rule you have to
+    remember is not a guard. This one is checked, every start, by the process that would cause it.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
+            if resp.status != 200:
+                return
+            json.loads(resp.read())  # a stray 200 from something else is not our hub
+    except (urllib.error.URLError, ConnectionError, TimeoutError, ValueError):
+        return  # nothing there, or not us - the normal case
+
+    _fail(
+        f"A Smart-Traffic hub is ALREADY answering on port {port}.\n"
+        "  Almost always this is `docker compose up` still running.\n"
+        "\n"
+        "  Starting a second hub over the same data/traffic.db is the one failure mode that does\n"
+        "  not announce itself: the container's SQLite handle goes stale and every later write is\n"
+        "  silently discarded. Episodes appear to run perfectly and are never recorded.\n"
+        "\n"
+        "  Use one or the other:\n"
+        "    docker compose down            # then re-run this\n"
+        f"    ...or open the running one:   http://127.0.0.1:{port}/\n"
+        f"    ...or use another port:       run_app.bat --port {port + 1}"
+    )
+
+
+def _sumo_home_from_wheel() -> Path | None:
+    """SUMO_HOME as provided by the `eclipse-sumo` wheel, if it is installed.
+
+    The wheel ships the binaries and the tools tree inside the package itself and exports the
+    directory as `sumo.SUMO_HOME`, but it sets no environment variable - so a machine whose only
+    SUMO is the wheel looks, to a bare `os.environ` check, exactly like a machine with no SUMO.
+    """
+    try:
+        import sumo  # noqa: PLC0415 - optional, and only meaningful at this point in startup
+    except ImportError:
+        return None
+    home = Path(getattr(sumo, "SUMO_HOME", "") or Path(sumo.__file__).resolve().parent)
+    # Trust the layout only if it is really there: sumolib.checkBinary() resolves through
+    # SUMO_HOME/bin, and src/env/ imports the tools tree.
+    return home if (home / "bin").is_dir() and (home / "tools").is_dir() else None
+
+
 def check_sumo_home() -> None:
-    """SUMO_HOME must be set - traci/libsumo import against it, and that import happens at
-    `src.api.server` import time (see src/api/server.py -> src/env/*), well before /health
-    would ever answer."""
+    """Make SUMO usable, or say exactly what is missing.
+
+    Two ways to have SUMO, and both are accepted, because requiring the first is what made this
+    launcher fail on every machine that was not the development one:
+
+      * a **native install** with SUMO_HOME set (how the dev machine is configured); or
+      * the **`eclipse-sumo` wheel** in the virtual environment, which ships `sumo` and
+        `netconvert` itself. `scripts/setup.py` installs it when no native SUMO is found, so this
+        is the ordinary case on a fresh laptop.
+
+    traci/libsumo import against SUMO_HOME at `src.api.server` import time (src/api/server.py ->
+    src/env/*), well before /health would ever answer, so it has to be right before the hub starts.
+    """
     sumo_home = os.environ.get("SUMO_HOME")
-    if not sumo_home:
+    if sumo_home and Path(sumo_home).exists():
+        return
+
+    wheel_home = _sumo_home_from_wheel()
+    if wheel_home is not None:
+        # Exported, not merely used locally: start_hub() launches uvicorn as a child process, which
+        # inherits this environment. Setting it here is what makes the hub itself find SUMO.
+        os.environ["SUMO_HOME"] = str(wheel_home)
+        os.environ["PATH"] = str(wheel_home / "bin") + os.pathsep + os.environ.get("PATH", "")
+        print(f"[run_app] SUMO_HOME unset; using the eclipse-sumo wheel at {wheel_home}")
+        return
+
+    if sumo_home:
         _fail(
-            "SUMO_HOME is not set.\n"
-            "  Install SUMO (https://sumo.dlr.de) if it is not already, then set it, e.g. in "
-            "PowerShell:\n"
-            '    setx SUMO_HOME "C:\\Program Files (x86)\\Eclipse\\Sumo"\n'
-            "  Close and reopen the terminal (or double-click run_app.bat again) after setx - "
-            "it does not affect the current session."
+            f"SUMO_HOME is set to {sumo_home!r} but that path does not exist, and the "
+            "eclipse-sumo wheel is not installed either.\n"
+            "  Either fix SUMO_HOME to point at your SUMO install, or let setup do it:\n"
+            "    setup.bat"
         )
-    if not Path(sumo_home).exists():
-        _fail(
-            f"SUMO_HOME is set to {sumo_home!r} but that path does not exist.\n"
-            "  Fix the SUMO_HOME environment variable to point at your SUMO install."
-        )
+    _fail(
+        "No SUMO found: SUMO_HOME is not set and the eclipse-sumo wheel is not installed.\n"
+        "  The easiest fix installs the wheel into .venv for you - no native install needed:\n"
+        "    setup.bat\n"
+        "  Or, if you have SUMO natively (https://sumo.dlr.de), point at it in PowerShell:\n"
+        '    setx SUMO_HOME "C:\\Program Files (x86)\\Eclipse\\Sumo"\n'
+        "  setx does not affect the current terminal - reopen it, or just double-click "
+        "run_app.bat again."
+    )
 
 
 def check_venv() -> None:
@@ -252,6 +329,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        check_no_hub_already_running(args.port)
         check_sumo_home()
         check_venv()
         check_database()
