@@ -1,8 +1,8 @@
 # Smart Traffic Intersection Management System
 
-Final-year CS capstone (solo). A **Deep RL (plain DQN)** controller selects the next NEMA
+Final-year CS capstone (solo). A **Deep RL (plain DQN)** controller selects the next 
 signal phase at a **single 4-way intersection** in the **SUMO** simulator (via TraCI), with the
-RL state augmented by a **frozen LSTM forecast** of near-future traffic. Evaluated against three
+RL state augmented by a **LSTM forecast** of near-future traffic. Evaluated against three
 non-RL baselines (Webster fixed-time, max-pressure, SUMO actuated) under a multi-seed protocol.
 
 
